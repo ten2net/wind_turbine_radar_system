@@ -1,12 +1,14 @@
 """
 风机-雷达干扰评估系统 - 主应用
 """
+from turtle import width
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+import pydeck
 
 # 设置页面配置
 st.set_page_config(
@@ -29,7 +31,7 @@ if 'scene' not in st.session_state:
 if 'evaluation_result' not in st.session_state:
     st.session_state.evaluation_result = None
 if 'map_center' not in st.session_state:
-    st.session_state.map_center = [39.9042, 116.4074]
+    st.session_state.map_center = [39.9042, 120.4074]
 
 # 自定义CSS样式
 st.markdown("""
@@ -333,8 +335,26 @@ def render_map():
     df = pd.DataFrame(map_data)
     
     # 使用Streamlit内置地图
+    MAPBOX_API_KEY ="***REMOVED***"
+    pydeck.Deck(api_keys={"mapbox": MAPBOX_API_KEY})
+    
+    view_state = pydeck.ViewState(
+        latitude=37.7576,
+        longitude=-122.4727,
+        zoom=12,
+        pitch=0
+    )    
+    r = pydeck.Deck(
+        initial_view_state=view_state,
+        map_provider="mapbox",
+        map_style="mapbox://styles/mapbox/standard"
+    )
+    
+    # pydeck.Deck(map_style="mapbox://styles/mapbox/streets-v11")
+    # pydeck.Deck(map_style="mapbox://styles/mapbox/light-v10")
     if len(df) > 0:
-        st.map(df, latitude='lat', longitude='lon', size='size')
+        st.map(df, latitude='lat', longitude='lon', size=20 ,color=(1,0.5,0.0), zoom=15)
+        # pydeck.Deck(map_provider="mapbox",map_style="mapbox://styles/mapbox/standard")
     
     # 显示统计信息
     col1, col2, col3 = st.columns(3)

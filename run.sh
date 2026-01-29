@@ -33,4 +33,4 @@ echo ""
 echo "启动应用..."
 echo "请在浏览器中访问: http://localhost:8501"
 echo ""
-cd src && streamlit run app.py
+cd src && streamlit run app.py 
