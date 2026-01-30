@@ -381,7 +381,7 @@ def render_map():
         r = pydeck.Deck(
             layers=[scatter_layer],
             initial_view_state=view_state,
-            map_style='mapbox://styles/mapbox/outdoors-v11',
+            map_style='mapbox://styles/mapbox/streets-zh-v1',
             api_keys={"mapbox": MAPBOX_API_KEY},
             tooltip={
                 'html': '<b>{name}</b><br/>{type}',

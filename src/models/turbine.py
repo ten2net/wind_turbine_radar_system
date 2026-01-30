@@ -83,7 +83,7 @@ class Turbine:
     
     # 位置参数
     latitude: float = 39.9142           # 纬度
-    longitude: float = 116.4174         # 经度
+    longitude: float = 119.5974         # 经度
     altitude_m: float = 0.0             # 海拔高度(m)
     yaw_angle_deg: float = 0.0          # 偏航角(度)
     
@@ -171,7 +171,7 @@ class Turbine:
             material=data.get('material', '金属'),
             rated_power_mw=data.get('rated_power_mw', 2.0),
             latitude=data.get('latitude', 39.9142),
-            longitude=data.get('longitude', 116.4174),
+            longitude=data.get('longitude', 119.5974),
             altitude_m=data.get('altitude_m', 0.0),
             yaw_angle_deg=data.get('yaw_angle_deg', 0.0)
         )

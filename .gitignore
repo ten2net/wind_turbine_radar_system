@@ -85,3 +85,5 @@ Thumbs.db
 outputs/
 Ubuntu22_x86_64_GPU.zip
 app.log
+__pycache__/
+*.pyc

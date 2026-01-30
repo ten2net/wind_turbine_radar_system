@@ -25,8 +25,8 @@ class RadarConfig:
     
     # 位置参数
     latitude: float = 39.9042           # 纬度
-    longitude: float = 116.4074         # 经度
-    altitude_m: float = 0.0             # 海拔高度(m)
+    longitude: float = 119.5774         # 经度
+    altitude_m: float = 100.0             # 海拔高度(m)
     
     # 系统标识
     radar_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
@@ -77,7 +77,7 @@ class RadarConfig:
             range_resolution_m=data.get('range_resolution_m', 150.0),
             angle_resolution_deg=data.get('angle_resolution_deg', 1.0),
             latitude=data.get('latitude', 39.9042),
-            longitude=data.get('longitude', 116.4074),
+            longitude=data.get('longitude', 119.5774),
             altitude_m=data.get('altitude_m', 0.0)
         )
     
