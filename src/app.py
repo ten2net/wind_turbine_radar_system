@@ -256,6 +256,11 @@ def render_target_config():
                 min_value=-30.0, max_value=50.0,
                 value=type_defaults["rcs_dbsm"], step=1.0
             )
+            target.velocity_ms = st.number_input(
+                "飞行速度 (m/s)",
+                min_value=0.0, max_value=1000.0,
+                value=type_defaults["velocity_ms"], step=10.0
+            )
         
         with col2:
             target.altitude_m = st.number_input(
@@ -263,11 +268,30 @@ def render_target_config():
                 min_value=0.0, max_value=30000.0,
                 value=type_defaults["altitude_m"], step=100.0
             )
-            target.velocity_ms = st.number_input(
-                "飞行速度 (m/s)",
-                min_value=0.0, max_value=1000.0,
-                value=type_defaults["velocity_ms"], step=10.0
+            target.heading_deg = st.number_input(
+                "航向角 (度)",
+                min_value=0.0, max_value=360.0,
+                value=0.0, step=5.0
             )
+    
+    with st.expander("位置信息"):
+        col1, col2 = st.columns(2)
+        with col1:
+            target.latitude = st.number_input(
+                "目标纬度", value=target.latitude, format="%.6f"
+            )
+        with col2:
+            target.longitude = st.number_input(
+                "目标经度", value=target.longitude, format="%.6f"
+            )
+        
+        # 计算并显示目标与雷达的距离和方位
+        radar = st.session_state.scene.radar
+        distance_m = calculate_distance(radar.latitude, radar.longitude, target.latitude, target.longitude)
+        distance_km = distance_m / 1000
+        bearing = calculate_bearing(radar.latitude, radar.longitude, target.latitude, target.longitude)
+        
+        st.info(f"📍 目标距离: **{distance_km:.2f} km** | 方位角: **{bearing:.1f}°**")
 
 
 def render_turbine_list():
@@ -447,6 +471,7 @@ def render_map():
     
     radar = st.session_state.scene.radar
     turbines = st.session_state.scene.turbines
+    target = st.session_state.scene.target
     
     # 创建地图数据
     map_data = []
@@ -471,6 +496,17 @@ def render_map():
             'color': [255, 255, 255],
             'icon': get_icon_data('windmill')
         })
+    
+    # 添加目标
+    map_data.append({
+        'lat': target.latitude,
+        'lon': target.longitude,
+        'name': f"目标 ({target.target_type})",
+        'type': f"目标 - RCS: {target.rcs_dbsm} dBm² | 高度: {target.altitude_m}m",
+        'size': 15,
+        'color': [0, 150, 255],
+        'icon': get_icon_data('airport')
+    })
     
     df = pd.DataFrame(map_data)
     

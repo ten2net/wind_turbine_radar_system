@@ -60,6 +60,10 @@ class TargetConfig:
     altitude_m: float = 10000.0           # 飞行高度(m)
     velocity_ms: float = 250.0            # 飞行速度(m/s)
     
+    # 位置参数
+    latitude: float = 39.9142             # 纬度
+    longitude: float = 120.5074           # 经度
+    
     # 可选参数
     heading_deg: float = 0.0              # 航向角(度)
     climb_rate_ms: float = 0.0            # 爬升率(m/s)
@@ -99,6 +103,8 @@ class TargetConfig:
             'rcs_dbsm': self.rcs_dbsm,
             'altitude_m': self.altitude_m,
             'velocity_ms': self.velocity_ms,
+            'latitude': self.latitude,
+            'longitude': self.longitude,
             'heading_deg': self.heading_deg,
             'climb_rate_ms': self.climb_rate_ms
         }
@@ -111,6 +117,8 @@ class TargetConfig:
             rcs_dbsm=data.get('rcs_dbsm', 10.0),
             altitude_m=data.get('altitude_m', 10000.0),
             velocity_ms=data.get('velocity_ms', 250.0),
+            latitude=data.get('latitude', 39.9142),
+            longitude=data.get('longitude', 120.5074),
             heading_deg=data.get('heading_deg', 0.0),
             climb_rate_ms=data.get('climb_rate_ms', 0.0)
         )
