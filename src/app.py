@@ -546,7 +546,7 @@ def render_map():
             'lon': t.longitude,
             'name': t.name,
             'type': f'风机 ({t.model})',
-            'size': 10,
+            'size': 20,
             'color': [255, 255, 255],
             'icon': get_icon_data('windmill')
         })
@@ -579,7 +579,7 @@ def render_map():
             size_scale=2,
             get_position=['lon', 'lat'],
             pickable=True,
-            opacity=0.8
+            opacity=1.0
         )
         
         # 创建雷达覆盖范围多边形图层（如果雷达有最大探测距离且用户选择显示）
@@ -725,8 +725,8 @@ def render_map():
             bearing=0
         )
         
-        # 创建地图（合并图标图层和覆盖范围图层）
-        all_layers = [icon_layer] + coverage_layers + impact_layers
+        # 创建地图（合并图标图层和覆盖范围图层），确保点图层在最上层
+        all_layers = coverage_layers + impact_layers + [icon_layer]
         r = pydeck.Deck(
             layers=all_layers,
             initial_view_state=view_state,
