@@ -874,29 +874,140 @@ def render_accuracy_results(result):
     st.progress(accuracy.overall_degradation / 100, 
                 text=f"综合精度降级: {accuracy.overall_degradation:.1f}%")
     
+    # 归一化阈值定义（基于典型雷达性能）
+    angle_threshold = 2.0    # 度 - 测角误差阈值
+    range_threshold = 50.0   # 米 - 测距误差阈值
+    velocity_threshold = 5.0 # 米/秒 - 测速误差阈值
+    
+    # 计算归一化精度分数（0-100，100表示完美精度）
+    # 分数 = 100 * (1 - error/threshold)，限制在0-100范围内
+    angle_score = max(0.0, min(100.0, 100.0 * (1.0 - accuracy.angle_error / angle_threshold)))
+    range_score = max(0.0, min(100.0, 100.0 * (1.0 - accuracy.range_error / range_threshold)))
+    velocity_score = max(0.0, min(100.0, 100.0 * (1.0 - accuracy.velocity_error / velocity_threshold)))
+    
+    # 显示模式选择
+    st.subheader("📊 精度可视化")
+    
+    # 在展开器中放置显示控制选项
+    with st.expander("显示控制选项", expanded=True):
+        display_mode = st.radio(
+            "选择显示模式",
+            ["对比模式（默认）", "剩余精度模式", "归一化分数模式"],
+            index=0,
+            help="对比模式同时显示两种表示方法，便于比较分析"
+        )
+    
     # 雷达图展示各项精度
     categories = ['测角精度', '测距精度', '测速精度']
-    values = [
+    
+    # 数据集1：基于降级百分比的剩余精度
+    remaining_values = [
         100 - accuracy.angle_degradation,
         100 - accuracy.range_degradation,
         100 - accuracy.velocity_degradation
     ]
     
-    fig = go.Figure(data=go.Scatterpolar(
-        r=values + [values[0]],
-        theta=categories + [categories[0]],
-        fill='toself',
-        name='剩余精度',
-        line_color='green',
-        fillcolor='rgba(0, 255, 0, 0.3)'
-    ))
+    # 数据集2：基于阈值归一化的精度分数
+    normalized_values = [angle_score, range_score, velocity_score]
+    
+    fig = go.Figure()
+    
+    # 根据显示模式添加轨迹
+    if display_mode in ["对比模式（默认）", "剩余精度模式"]:
+        fig.add_trace(go.Scatterpolar(
+            r=remaining_values + [remaining_values[0]],
+            theta=categories + [categories[0]],
+            fill='toself',
+            name='剩余精度 (%)',
+            line_color='green',
+            fillcolor='rgba(0, 255, 0, 0.2)' if display_mode == "对比模式（默认）" else 'rgba(0, 255, 0, 0.4)',
+            opacity=0.8
+        ))
+    
+    if display_mode in ["对比模式（默认）", "归一化分数模式"]:
+        fig.add_trace(go.Scatterpolar(
+            r=normalized_values + [normalized_values[0]],
+            theta=categories + [categories[0]],
+            fill='toself',
+            name='归一化分数',
+            line_color='blue',
+            fillcolor='rgba(0, 0, 255, 0.2)' if display_mode == "对比模式（默认）" else 'rgba(0, 0, 255, 0.4)',
+            opacity=0.8
+        ))
+    
+    # 在对比模式下添加理想基准线
+    if display_mode == "对比模式（默认）":
+        fig.add_trace(go.Scatterpolar(
+            r=[100, 100, 100, 100],
+            theta=categories + [categories[0]],
+            mode='lines',
+            name='理想基准',
+            line=dict(color='red', width=2, dash='dash'),
+            opacity=0.6
+        ))
+    
+    # 根据模式设置标题
+    if display_mode == "剩余精度模式":
+        title_text = "精度保留比例"
+    elif display_mode == "归一化分数模式":
+        title_text = "归一化精度分数"
+    else:
+        title_text = "精度可视化对比"
+    
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-        showlegend=False,
-        title="精度保留比例",
-        height=350
+        polar=dict(
+            radialaxis=dict(
+                visible=True, 
+                range=[0, 100],
+                tickvals=[0, 20, 40, 60, 80, 100],
+                ticktext=['0', '20', '40', '60', '80', '100']
+            )
+        ),
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        ),
+        title=title_text,
+        height=400
     )
+    
     st.plotly_chart(fig, use_container_width=True)
+    
+    # 显示归一化说明
+    with st.expander("📊 归一化说明", expanded=False):
+        st.markdown("""
+        **两种精度表示方法：**
+        
+        1. **剩余精度 (%)**：基于降级百分比计算。显示在当前干扰条件下，各项测量精度相比理想状态的保留比例。
+           - 计算方式：100% - 降级百分比
+           - 优点：反映相对降级程度，显示干扰导致的性能下降
+           
+        2. **归一化分数**：基于误差阈值归一化计算。将实际误差映射到0-100分数，便于不同量纲指标间的直接比较。
+           - 计算方式：100 × (1 - 实际误差 / 阈值)
+           - 阈值设置（基于典型雷达性能）：
+             * 测角误差：≤ {angle_threshold}° 为可接受
+             * 测距误差：≤ {range_threshold} m 为可接受  
+             * 测速误差：≤ {velocity_threshold} m/s 为可接受
+           - 优点：提供绝对性能评估，便于跨指标比较，直观显示是否达到可接受水平
+        
+        **解读建议：**
+        - 图形越接近外圈（100分）表示精度越好
+        - **剩余精度模式**：绿色区域反映干扰引起的降级程度
+        - **归一化分数模式**：蓝色区域反映绝对性能水平（是否达到阈值要求）
+        - **对比模式**：同时显示两种表示方法，便于综合分析
+        - 红色虚线（对比模式）表示理想基准（100分）
+        
+        **实际应用**：
+        - 剩余精度 < 70% 或归一化分数 < 70 分：建议进行干扰缓解
+        - 剩余精度 < 50% 或归一化分数 < 50 分：强烈建议调整系统配置
+        """.format(
+            angle_threshold=angle_threshold,
+            range_threshold=range_threshold,
+            velocity_threshold=velocity_threshold
+        ))
 
 
 def render_multipath_results(result):
