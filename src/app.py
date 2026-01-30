@@ -23,7 +23,7 @@ from models import RadarConfig, Turbine, TargetConfig, Scene
 from models.turbine import TURBINE_MODELS
 from models.target import TARGET_TYPES
 from engine import EvalEngine
-from utils.geo_utils import calculate_distance, calculate_bearing
+from utils.geo_utils import calculate_distance, calculate_bearing, calculate_destination
 
 # 初始化session state
 if 'scene' not in st.session_state:
@@ -319,6 +319,12 @@ def render_map():
     """渲染地图视图"""
     st.subheader("🗺️ 场景地图")
     
+    # 覆盖范围显示控制
+    if 'show_coverage' not in st.session_state:
+        st.session_state.show_coverage = True
+    show_coverage = st.checkbox("显示雷达覆盖范围", value=st.session_state.show_coverage, key="show_coverage_checkbox")
+    st.session_state.show_coverage = show_coverage
+    
     radar = st.session_state.scene.radar
     turbines = st.session_state.scene.turbines
     
@@ -366,6 +372,39 @@ def render_map():
             opacity=0.8
         )
         
+        # 创建雷达覆盖范围多边形图层（如果雷达有最大探测距离且用户选择显示）
+        coverage_layers = []
+        if radar.max_range_km > 0 and st.session_state.show_coverage:
+            # 将最大探测距离转换为米
+            max_range_m = radar.max_range_km * 1000
+            # 生成圆形多边形的点（每10度一个点）
+            polygon_points = []
+            for bearing in range(0, 361, 10):  # 包括360度以闭合多边形
+                dest_lat, dest_lon = calculate_destination(
+                    radar.latitude, radar.longitude, bearing, max_range_m
+                )
+                polygon_points.append([dest_lon, dest_lat])  # 注意：pydeck使用[经度, 纬度]
+            
+            # 创建多边形数据
+            polygon_data = [{
+                'polygon': polygon_points,
+                'color': [0, 255, 0, 40]  # 半透明绿色 (RGBA)
+            }]
+            
+            coverage_layer = pydeck.Layer(
+                'PolygonLayer',
+                data=polygon_data,
+                get_polygon='polygon',
+                get_fill_color='color',
+                get_line_color=[255, 0, 0],
+                get_line_width=6,
+                filled=True,
+                stroked=True,
+                pickable=False,
+                opacity=0.5
+            )
+            coverage_layers.append(coverage_layer)
+        
         # 设置视图状态（以雷达位置为中心）
         zoom_level = 10 if not turbines else 9  # 有风机时缩小一些
         view_state = pydeck.ViewState(
@@ -376,9 +415,10 @@ def render_map():
             bearing=0
         )
         
-        # 创建地图
+        # 创建地图（合并图标图层和覆盖范围图层）
+        all_layers = [icon_layer] + coverage_layers
         r = pydeck.Deck(
-            layers=[icon_layer],
+            layers=all_layers,
             initial_view_state=view_state,
             map_style='mapbox://styles/mapbox/streets-zh-v1',
             api_keys={"mapbox": MAPBOX_API_KEY},
