@@ -334,27 +334,68 @@ def render_map():
     
     df = pd.DataFrame(map_data)
     
-    # 使用Streamlit内置地图
-    MAPBOX_API_KEY ="***REMOVED***"
-    pydeck.Deck(api_keys={"mapbox": MAPBOX_API_KEY})
+    # Mapbox API密钥
+    MAPBOX_API_KEY = "***REMOVED***"
     
-    view_state = pydeck.ViewState(
-        latitude=37.7576,
-        longitude=-122.4727,
-        zoom=12,
-        pitch=0
-    )    
-    r = pydeck.Deck(
-        initial_view_state=view_state,
-        map_provider="mapbox",
-        map_style="mapbox://styles/mapbox/standard"
-    )
+    # 颜色映射
+    color_map = {
+        'red': [255, 0, 0],
+        'blue': [0, 0, 255]
+    }
     
-    # pydeck.Deck(map_style="mapbox://styles/mapbox/streets-v11")
-    # pydeck.Deck(map_style="mapbox://styles/mapbox/light-v10")
+    # 准备图层数据
     if len(df) > 0:
-        st.map(df, latitude='lat', longitude='lon', size=20 ,color=(1,0.5,0.0), zoom=15)
-        # pydeck.Deck(map_provider="mapbox",map_style="mapbox://styles/mapbox/standard")
+        # 转换为PyDeck所需的格式
+        df['radius'] = df['size'] * 50  # 缩放半径
+        df['color'] = df['color'].map(lambda x: color_map.get(x, [128, 128, 128]))
+        
+        # 创建散点图层
+        scatter_layer = pydeck.Layer(
+            'ScatterplotLayer',
+            data=df,
+            get_position=['lon', 'lat'],
+            get_radius='radius',
+            get_fill_color='color',
+            get_line_color=[0, 0, 0],
+            get_line_width=1,
+            pickable=True,
+            opacity=0.8,
+            stroked=True,
+            filled=True,
+            radius_scale=1,
+            radius_min_pixels=3,
+            radius_max_pixels=30
+        )
+        
+        # 设置视图状态（以雷达位置为中心）
+        zoom_level = 10 if not turbines else 9  # 有风机时缩小一些
+        view_state = pydeck.ViewState(
+            latitude=radar.latitude,
+            longitude=radar.longitude,
+            zoom=zoom_level,
+            pitch=0,
+            bearing=0
+        )
+        
+        # 创建地图
+        r = pydeck.Deck(
+            layers=[scatter_layer],
+            initial_view_state=view_state,
+            map_style='mapbox://styles/mapbox/outdoors-v11',
+            api_keys={"mapbox": MAPBOX_API_KEY},
+            tooltip={
+                'html': '<b>{name}</b><br/>{type}',
+                'style': {
+                    'backgroundColor': 'steelblue',
+                    'color': 'white'
+                }
+            }
+        )
+        
+        # 渲染地图
+        st.pydeck_chart(r, use_container_width=True)
+    else:
+        st.info("暂无数据，请先配置雷达和风机")
     
     # 显示统计信息
     col1, col2, col3 = st.columns(3)
