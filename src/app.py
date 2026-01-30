@@ -277,7 +277,7 @@ def render_turbine_list():
     turbines = st.session_state.scene.turbines
     
     if not turbines:
-        st.info("暂无风机，请在上方添加")
+        st.info("暂无风机，请从左侧栏中添加")
         return
     
     # 创建风机数据表格
@@ -319,6 +319,103 @@ def get_icon_data(icon: str) -> dict:
         "mask": True  # Set to True to allow custom coloring
     }
 
+
+def calculate_turbine_impact_zones(radar, turbines, max_range_km):
+    """
+    计算风机对雷达覆盖的影响区域
+    
+    Args:
+        radar: 雷达配置对象
+        turbines: 风机列表
+        max_range_km: 最大探测距离（km）
+        
+    Returns:
+        impact_zones: 影响区域多边形数据列表
+    """
+    impact_zones = []
+    max_range_m = max_range_km * 1000
+    
+    for turbine in turbines:
+        # 计算雷达到风机的方位角
+        bearing = calculate_bearing(radar.latitude, radar.longitude, 
+                                   turbine.latitude, turbine.longitude)
+        
+        # 计算距离
+        distance = calculate_distance(radar.latitude, radar.longitude,
+                                     turbine.latitude, turbine.longitude)
+        
+        # 根据波束宽度确定扇形区域宽度
+        sector_width = radar.beamwidth_deg
+        
+        # 基于遮挡模型计算影响因子
+        # 简化的影响模型：影响强度随距离和角度衰减
+        distance_factor = min(1.0, max(0.1, 1.0 - distance / max_range_m))
+        
+        # 计算方位角差（归一化到0-180度）
+        angle_diff = abs(bearing - radar.beam_direction_deg)
+        angle_diff = min(angle_diff, 360 - angle_diff)
+        
+        # 基于高斯天线方向图的衰减因子
+        angular_attenuation = np.exp(-2.776 * (angle_diff / sector_width)**2)
+        
+        # 综合影响因子
+        impact_factor = distance_factor * angular_attenuation
+        
+        # 计算影响区域的边界点
+        # 影响区域是从风机位置向外扩散的扇形，表示遮挡影响的范围
+        polygon_points = []
+        
+        # 添加雷达中心点
+        polygon_points.append([radar.longitude, radar.latitude])
+        
+        # 计算扇形左边界
+        left_bearing = (bearing - sector_width / 2) % 360.0
+        
+        # 沿着左边界从雷达向外延伸到最大范围
+        for r in np.linspace(distance * 0.2, max_range_m, 5):
+            dest_lat, dest_lon = calculate_destination(
+                radar.latitude, radar.longitude, left_bearing, r
+            )
+            polygon_points.append([dest_lon, dest_lat])
+        
+        # 沿着最大范围弧线从左到右
+        for b in np.linspace(left_bearing, (bearing + sector_width / 2) % 360.0, 10):
+            dest_lat, dest_lon = calculate_destination(
+                radar.latitude, radar.longitude, b, max_range_m
+            )
+            polygon_points.append([dest_lon, dest_lat])
+        
+        # 沿着右边界从最大范围回到雷达
+        right_bearing = (bearing + sector_width / 2) % 360.0
+        for r in np.linspace(max_range_m, distance * 0.2, 5):
+            dest_lat, dest_lon = calculate_destination(
+                radar.latitude, radar.longitude, right_bearing, r
+            )
+            polygon_points.append([dest_lon, dest_lat])
+        
+        # 闭合多边形
+        polygon_points.append([radar.longitude, radar.latitude])
+        
+        # 根据影响因子确定颜色（橙色到红色渐变）
+        # 影响因子越大，颜色越红（越严重）
+        red = int(255 * impact_factor)
+        green = int(200 * (1.0 - impact_factor * 0.5))
+        blue = int(100 * (1.0 - impact_factor))
+        alpha = int(150 * impact_factor + 50)  # 50-200透明度
+        
+        impact_zones.append({
+            'polygon': polygon_points,
+            'color': [red, green, blue, alpha],
+            'name': turbine.name,
+            'type': f'影响区域 (强度: {impact_factor:.2f})',
+            'turbine_name': turbine.name,  # 保留原始字段
+            'impact_factor': round(impact_factor, 2),
+            'distance_km': round(distance / 1000, 2)
+        })
+    
+    return impact_zones
+
+
 def render_map():
     """渲染地图视图"""
     st.subheader("🗺️ 场景地图")
@@ -328,6 +425,25 @@ def render_map():
         st.session_state.show_coverage = True
     show_coverage = st.checkbox("显示雷达覆盖范围", value=st.session_state.show_coverage, key="show_coverage_checkbox")
     st.session_state.show_coverage = show_coverage
+    
+    # 影响区域显示控制
+    if 'show_impact' not in st.session_state:
+        st.session_state.show_impact = True
+    show_impact = st.checkbox("显示风机影响区域", value=st.session_state.show_impact, key="show_impact_checkbox")
+    st.session_state.show_impact = show_impact
+    
+    # 影响阈值控制
+    if 'impact_threshold' not in st.session_state:
+        st.session_state.impact_threshold = 0.3
+    impact_threshold = st.slider(
+        "影响阈值 (仅显示影响因子高于此值的区域)",
+        min_value=0.0,
+        max_value=1.0,
+        value=st.session_state.impact_threshold,
+        step=0.05,
+        key="impact_threshold_slider"
+    )
+    st.session_state.impact_threshold = impact_threshold
     
     radar = st.session_state.scene.radar
     turbines = st.session_state.scene.turbines
@@ -474,6 +590,41 @@ def render_map():
             )
             coverage_layers.append(coverage_layer)
         
+        # 添加风机影响区域图层
+        impact_layers = []
+        if st.session_state.show_impact and turbines:
+            # 计算影响区域
+            impact_zones = calculate_turbine_impact_zones(radar, turbines, radar.max_range_km)
+            
+            # 根据阈值过滤影响区域
+            filtered_zones = [zone for zone in impact_zones if zone['impact_factor'] >= st.session_state.impact_threshold]
+            
+            for zone in filtered_zones:
+                impact_layer = pydeck.Layer(
+                    'PolygonLayer',
+                    data=[zone],  # 每个风机单独一个图层
+                    get_polygon='polygon',
+                    get_fill_color='color',
+                    get_line_color=[255, 100, 0],
+                    get_line_width=3,
+                    filled=True,
+                    stroked=True,
+                    pickable=True,
+                    opacity=0.7,
+                    auto_highlight=True
+                )
+                impact_layers.append(impact_layer)
+            
+            # 显示颜色图例
+            if filtered_zones:
+                st.markdown("""
+                **颜色图例**（影响强度）：
+                - 🔴 红色越深：影响因子越高（接近1.0）
+                - 🟠 橙色：中等影响（0.5-0.7）
+                - 🟡 黄色：较弱影响（0.3-0.5）
+                - 🟢 绿色：轻微影响（低于0.3）
+                """)
+        
         # 设置视图状态（以雷达位置为中心）
         zoom_level = 10 if not turbines else 9  # 有风机时缩小一些
         view_state = pydeck.ViewState(
@@ -485,14 +636,14 @@ def render_map():
         )
         
         # 创建地图（合并图标图层和覆盖范围图层）
-        all_layers = [icon_layer] + coverage_layers
+        all_layers = [icon_layer] + coverage_layers + impact_layers
         r = pydeck.Deck(
             layers=all_layers,
             initial_view_state=view_state,
             map_style='mapbox://styles/mapbox/streets-zh-v1',
             api_keys={"mapbox": MAPBOX_API_KEY},
             tooltip={
-                'html': '<b>{name}</b><br/>{type}',
+                'html': '<b>{name}</b><br/>{type}<br/><small>影响因子: {impact_factor} | 距离: {distance_km} km</small>',
                 'style': {
                     'backgroundColor': 'steelblue',
                     'color': 'white'
@@ -983,13 +1134,20 @@ def main():
         render_target_config()
     
     # 主区域
-    col1, col2 = st.columns([1, 1])
+    # col1, col2 = st.columns([1, 1])
     
-    with col1:
-        render_map()
+
+    render_map()
     
-    with col2:
-        render_turbine_list()
+
+    render_turbine_list()
+    # col1, col2 = st.columns([1, 1])
+    
+    # with col1:
+    #     render_map()
+    
+    # with col2:
+    #     render_turbine_list()
     
     # 评估按钮
     render_evaluation_button()
