@@ -775,7 +775,22 @@ def render_blocking_results(result):
     # 受影响扇区表格
     if blocking.affected_sectors:
         st.subheader("受影响扇区详情")
-        sector_df = pd.DataFrame(blocking.affected_sectors)
+        # 创建展平的数据
+        flat_data = []
+        for sector in blocking.affected_sectors:
+            flat = {
+                '风机ID': sector['turbine_id'],
+                '风机名称': sector['turbine_name'],
+                '遮挡因子(%)': sector['blocking'],
+                '遮挡持续时间(%)': sector['duration'],
+                '扇区中心角(°)': sector['sector']['center'],
+                '扇区起始角(°)': sector['sector']['start'],
+                '扇区终止角(°)': sector['sector']['end'],
+                '扇区宽度(°)': sector['sector']['width'],
+                '距离(km)': sector['distance_km']
+            }
+            flat_data.append(flat)
+        sector_df = pd.DataFrame(flat_data)
         st.dataframe(sector_df, use_container_width=True)
 
 
@@ -828,7 +843,16 @@ def render_scattering_results(result):
     # 各风机干扰详情
     if scattering.affected_turbines:
         st.subheader("各风机干扰详情")
+        # 重命名列名
+        rename_map = {
+            'turbine_id': '风机ID',
+            'turbine_name': '风机名称',
+            'distance_km': '距离(km)',
+            'rcs_dbsm': 'RCS(dBm²)',
+            'power_dbm': '干扰功率(dBm)'
+        }
         turbine_df = pd.DataFrame(scattering.affected_turbines)
+        turbine_df = turbine_df.rename(columns=rename_map)
         st.dataframe(turbine_df, use_container_width=True)
 
 
