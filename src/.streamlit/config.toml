@@ -1,0 +1,11 @@
+[server]
+enableStaticServing = true
+enableCORS = false
+enableXsrfProtection = false
+corsAllowedOrigins = ['http://localhost:8501', 'https://labs.mapbox.com']
+
+[mapbox]
+token = "***REMOVED***"
+
+[theme]
+backgroundColor = "#ffffff"

@@ -300,6 +300,16 @@ def render_turbine_list():
         st.success("✅ 已清空所有风机")
         st.rerun()
 
+def get_icon_data(icon: str) -> dict:
+    """获取图标数据"""
+    return {
+        "url": f"https://cdn.jsdelivr.net/npm/@mapbox/maki@6.2.0/icons/{icon}-15.svg",
+        "id": icon,
+        "width": 242,
+        "height": 242,
+        "anchorY": 242,
+        "mask": True  # Set to True to allow custom coloring
+    }
 
 def render_map():
     """渲染地图视图"""
@@ -310,15 +320,14 @@ def render_map():
     
     # 创建地图数据
     map_data = []
-    
-    # 添加雷达站
     map_data.append({
         'lat': radar.latitude,
         'lon': radar.longitude,
         'name': radar.name,
         'type': '雷达站',
         'size': 20,
-        'color': 'red'
+        'color': [255, 0, 0],
+        'icon': get_icon_data('communications-tower')
     })
     
     # 添加风机
@@ -329,7 +338,8 @@ def render_map():
             'name': t.name,
             'type': f'风机 ({t.model})',
             'size': 10,
-            'color': 'blue'
+            'color': [255, 255, 255],
+            'icon': get_icon_data('windmill')
         })
     
     df = pd.DataFrame(map_data)
@@ -337,34 +347,19 @@ def render_map():
     # Mapbox API密钥
     MAPBOX_API_KEY = "***REMOVED***"
     
-    # 颜色映射
-    color_map = {
-        'red': [255, 0, 0],
-        'blue': [0, 0, 255]
-    }
-    
     # 准备图层数据
     if len(df) > 0:
-        # 转换为PyDeck所需的格式
-        df['radius'] = df['size'] * 50  # 缩放半径
-        df['color'] = df['color'].map(lambda x: color_map.get(x, [128, 128, 128]))
-        
-        # 创建散点图层
-        scatter_layer = pydeck.Layer(
-            'ScatterplotLayer',
+        # 创建图标图层
+        icon_layer = pydeck.Layer(
+            'IconLayer',
             data=df,
+            get_icon='icon',
+            get_size='size',
+            get_color="color",
+            size_scale=2,
             get_position=['lon', 'lat'],
-            get_radius='radius',
-            get_fill_color='color',
-            get_line_color=[0, 0, 0],
-            get_line_width=1,
             pickable=True,
-            opacity=0.8,
-            stroked=True,
-            filled=True,
-            radius_scale=1,
-            radius_min_pixels=3,
-            radius_max_pixels=30
+            opacity=0.8
         )
         
         # 设置视图状态（以雷达位置为中心）
@@ -379,7 +374,7 @@ def render_map():
         
         # 创建地图
         r = pydeck.Deck(
-            layers=[scatter_layer],
+            layers=[icon_layer],
             initial_view_state=view_state,
             map_style='mapbox://styles/mapbox/streets-zh-v1',
             api_keys={"mapbox": MAPBOX_API_KEY},
