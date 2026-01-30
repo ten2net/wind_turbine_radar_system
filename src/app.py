@@ -194,7 +194,7 @@ def render_turbine_config():
     with st.expander("位置信息"):
         col1, col2 = st.columns(2)
         with col1:
-            lat_offset = st.slider("纬度偏移 (km)", -10.0, 10.0, 1.0, 0.1)
+            lat_offset = st.slider("纬度偏移 (km)", -10.0, 10.0, 0.0, 0.1)
         with col2:
             lon_offset = st.slider("经度偏移 (km)", -10.0, 10.0, 1.0, 0.1)
         
