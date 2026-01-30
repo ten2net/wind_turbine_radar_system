@@ -8,7 +8,7 @@ from models.radar import RadarConfig
 from models.turbine import Turbine
 from models.target import TargetConfig
 from models.results import AccuracyResult
-from utils.geo_utils import is_in_beam
+from utils.geo_utils import is_in_beam, is_blocking_path
 
 
 class AccuracyModel:
@@ -109,6 +109,32 @@ class AccuracyModel:
         max_error = 0.0
         
         for turbine in turbines:
+            # 检查风机是否在雷达波束范围内
+            turbine_in_beam, _, _ = is_in_beam(
+                radar.latitude, radar.longitude,
+                radar.altitude_m + radar.antenna_height_m,
+                radar.beam_direction_deg, radar.beamwidth_deg,
+                turbine.latitude, turbine.longitude,
+                turbine.altitude_m + turbine.tower_height_m,
+                radar.max_range_km
+            )
+            
+            # 如果风机不在波束内，不产生多径效应
+            if not turbine_in_beam:
+                continue
+            
+            # 检查风机是否在雷达和目标之间的路径上（多径效应主要来自路径上的风机）
+            is_multipath, _, _, _ = is_blocking_path(
+                radar.latitude, radar.longitude,
+                turbine.latitude, turbine.longitude,
+                target.latitude, target.longitude,
+                angular_tolerance=radar.beamwidth_deg
+            )
+            
+            # 如果风机不在多径路径上，不产生显著多径效应
+            if not is_multipath:
+                continue
+            
             # 计算多径距离
             distance_rt = self._calculate_distance(radar, turbine)
             

@@ -330,7 +330,7 @@ def render_turbine_list():
     if st.button("🗑️ 清空所有风机"):
         st.session_state.scene.clear_turbines()
         st.success("✅ 已清空所有风机")
-        st.rerun()
+        # st.rerun()
 
 def get_icon_data(icon: str) -> dict:
     """获取图标数据"""
