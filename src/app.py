@@ -845,183 +845,179 @@ def render_doppler_results(result):
         st.plotly_chart(fig, use_container_width=True)
 
 
+def create_gauge_chart(title, value, threshold, unit, color):
+    """创建仪表盘图表"""
+    # 计算百分比（0-100%）
+    percentage = min(100, max(0, (1 - value / threshold) * 100)) if threshold > 0 else 0
+    
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number+delta",
+        value=percentage,
+        number={'suffix': '%', 'font': {'size': 24}},
+        title={'text': title, 'font': {'size': 16}},
+        delta={'reference': 100, 'relative': False, 'valueformat': '.1f', 'suffix': '%'},
+        gauge={
+            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'bar': {'color': color, 'thickness': 0.75},
+            'bgcolor': "white",
+            'borderwidth': 2,
+            'bordercolor': "gray",
+            'steps': [
+                {'range': [0, 30], 'color': '#ffcccc'},  # 红色区域 - 差
+                {'range': [30, 70], 'color': '#ffffcc'}, # 黄色区域 - 中
+                {'range': [70, 100], 'color': '#ccffcc'} # 绿色区域 - 好
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': 70
+            }
+        }
+    ))
+    
+    fig.update_layout(
+        height=300,
+        margin=dict(l=20, r=20, t=50, b=20),
+        paper_bgcolor="white",
+        font={'size': 12}
+    )
+    
+    return fig, percentage
+
+
 def render_accuracy_results(result):
-    """渲染精度分析结果"""
+    """渲染精度分析结果 - 单独分析每个精度指标"""
     accuracy = result.accuracy
-    
-    # 指标卡片
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric(
-            label="测角偏差",
-            value=f"{accuracy.angle_error:.3f}°",
-            delta=f"降级 {accuracy.angle_degradation:.1f}%"
-        )
-    
-    with col2:
-        st.metric(
-            label="测距偏差",
-            value=f"{accuracy.range_error:.0f} m",
-            delta=f"降级 {accuracy.range_degradation:.1f}%"
-        )
-    
-    with col3:
-        st.metric(
-            label="测速偏差",
-            value=f"{accuracy.velocity_error:.1f} m/s",
-            delta=f"降级 {accuracy.velocity_degradation:.1f}%"
-        )
-    
-    # 综合降级等级
-    st.progress(accuracy.overall_degradation / 100, 
-                text=f"综合精度降级: {accuracy.overall_degradation:.1f}%")
     
     # 归一化阈值定义（基于典型雷达性能）
     angle_threshold = 2.0    # 度 - 测角误差阈值
     range_threshold = 50.0   # 米 - 测距误差阈值
     velocity_threshold = 5.0 # 米/秒 - 测速误差阈值
     
-    # 计算归一化精度分数（0-100，100表示完美精度）
-    # 分数 = 100 * (1 - error/threshold)，限制在0-100范围内
-    angle_score = max(0.0, min(10000.0, 10000.0 * (1.0 - accuracy.angle_error / angle_threshold)))
-    range_score = max(0.0, min(10000.0, 10000.0 * (1.0 - accuracy.range_error / range_threshold)))
-    velocity_score = max(0.0, min(10000.0, 10000.0 * (1.0 - accuracy.velocity_error / velocity_threshold)))
+    st.subheader("📊 精度指标单独分析")
     
-    # 显示模式选择
-    st.subheader("📊 精度可视化")
+    # 创建三个独立的仪表盘
+    col1, col2, col3 = st.columns(3)
     
-    # 在展开器中放置显示控制选项
-    with st.expander("显示控制选项", expanded=True):
-        display_mode = st.radio(
-            "选择显示模式",
-            ["对比模式（默认）", "剩余精度模式", "归一化分数模式"],
-            index=0,
-            help="对比模式同时显示两种表示方法，便于比较分析"
+    with col1:
+        st.markdown("**🎯 测角精度**")
+        angle_fig, angle_pct = create_gauge_chart(
+            f"误差: {accuracy.angle_error:.3f}°",
+            accuracy.angle_error,
+            angle_threshold,
+            "°",
+            "#1f77b4"
         )
+        st.plotly_chart(angle_fig, use_container_width=True)
+        st.caption(f"阈值: {angle_threshold}° | 降级: {accuracy.angle_degradation:.1f}%")
     
-    # 雷达图展示各项精度
-    categories = ['测角精度', '测距精度', '测速精度']
+    with col2:
+        st.markdown("**📏 测距精度**")
+        range_fig, range_pct = create_gauge_chart(
+            f"误差: {accuracy.range_error:.0f}m",
+            accuracy.range_error,
+            range_threshold,
+            "m",
+            "#ff7f0e"
+        )
+        st.plotly_chart(range_fig, use_container_width=True)
+        st.caption(f"阈值: {range_threshold}m | 降级: {accuracy.range_degradation:.1f}%")
     
-    # 数据集1：基于降级百分比的剩余精度
-    remaining_values = [
-        100 - accuracy.angle_degradation,
-        100 - accuracy.range_degradation,
-        100 - accuracy.velocity_degradation
-    ]
+    with col3:
+        st.markdown("**🚀 测速精度**")
+        velocity_fig, velocity_pct = create_gauge_chart(
+            f"误差: {accuracy.velocity_error:.1f}m/s",
+            accuracy.velocity_error,
+            velocity_threshold,
+            "m/s",
+            "#2ca02c"
+        )
+        st.plotly_chart(velocity_fig, use_container_width=True)
+        st.caption(f"阈值: {velocity_threshold}m/s | 降级: {accuracy.velocity_degradation:.1f}%")
     
-    # 数据集2：基于阈值归一化的精度分数（放大100倍，范围0-10000）
-    normalized_values_raw = [angle_score, range_score, velocity_score]
-    normalized_values_scaled = [v / 100.0 for v in normalized_values_raw]  # 缩放回0-100范围
-
-    fig = go.Figure()
-    radial_range = [0, 100]  # 默认范围
-    radial_range = [0, 100]  # 默认范围
+    # 综合精度评估
+    st.markdown("---")
+    st.subheader("📈 综合精度评估")
     
-    # 根据显示模式添加轨迹
-    if display_mode in ["对比模式（默认）", "剩余精度模式"]:
-        fig.add_trace(go.Scatterpolar(
-            r=remaining_values + [remaining_values[0]],
-            theta=categories + [categories[0]],
-            fill='toself',
-            name='剩余精度 (%)',
-            line_color='green',
-            fillcolor='rgba(0, 255, 0, 0.2)' if display_mode == "对比模式（默认）" else 'rgba(0, 255, 0, 0.4)',
-            opacity=0.8
-        ))
+    # 计算综合得分
+    overall_score = (angle_pct + range_pct + velocity_pct) / 3
     
-    if display_mode in ["对比模式（默认）", "归一化分数模式"]:
-        # 选择显示的值
-        if display_mode == "归一化分数模式":
-            values_to_use = normalized_values_raw
-            radial_range = [0, 10000]  # 放大100倍后的范围
-        else:  # 对比模式
-            values_to_use = normalized_values_scaled
-            # radial_range 保持默认 [0, 100]
-        
-        fig.add_trace(go.Scatterpolar(
-            r=values_to_use + [values_to_use[0]],
-            theta=categories + [categories[0]],
-            fill='toself',
-            name='归一化分数',
-            line_color='blue',
-            fillcolor='rgba(0, 0, 255, 0.2)' if display_mode == "对比模式（默认）" else 'rgba(0, 0, 255, 0.4)',
-            opacity=0.8
-        ))
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.metric(
+            label="综合精度得分",
+            value=f"{overall_score:.1f}%",
+            delta=f"降级 {accuracy.overall_degradation:.1f}%"
+        )
+    with col2:
+        # 综合进度条
+        st.progress(overall_score / 100, text=f"综合性能: {overall_score:.1f}%")
     
-    # 在对比模式下添加理想基准线
-    if display_mode == "对比模式（默认）":
-        fig.add_trace(go.Scatterpolar(
-            r=[100, 100, 100, 100],
-            theta=categories + [categories[0]],
-            mode='lines',
-            name='理想基准',
-            line=dict(color='red', width=2, dash='dash'),
-            opacity=0.6
-        ))
+    # 详细数据表格
+    with st.expander("📋 查看详细数据", expanded=False):
+        data = {
+            '指标': ['测角精度', '测距精度', '测速精度', '综合精度'],
+            '实际误差': [
+                f"{accuracy.angle_error:.3f}°",
+                f"{accuracy.range_error:.0f}m",
+                f"{accuracy.velocity_error:.1f}m/s",
+                "-"
+            ],
+            '阈值': [f"{angle_threshold}°", f"{range_threshold}m", f"{velocity_threshold}m/s", "-"],
+            '性能得分': [f"{angle_pct:.1f}%", f"{range_pct:.1f}%", f"{velocity_pct:.1f}%", f"{overall_score:.1f}%"],
+            '降级比例': [
+                f"{accuracy.angle_degradation:.1f}%",
+                f"{accuracy.range_degradation:.1f}%",
+                f"{accuracy.velocity_degradation:.1f}%",
+                f"{accuracy.overall_degradation:.1f}%"
+            ]
+        }
+        df = pd.DataFrame(data)
+        st.dataframe(df, use_container_width=True, hide_index=True)
     
-    # 根据模式设置标题
-    if display_mode == "剩余精度模式":
-        title_text = "精度保留比例"
-    elif display_mode == "归一化分数模式":
-        title_text = "归一化精度分数"
+    # 评估建议
+    st.markdown("---")
+    st.subheader("💡 精度评估建议")
+    
+    recommendations = []
+    if angle_pct < 70:
+        recommendations.append(f"🎯 **测角精度不足**: 当前误差 {accuracy.angle_error:.3f}° 超过阈值 {angle_threshold}° 的30%，建议检查雷达天线对准或增加信号处理算法优化。")
+    if range_pct < 70:
+        recommendations.append(f"📏 **测距精度不足**: 当前误差 {accuracy.range_error:.0f}m 超过阈值 {range_threshold}m 的30%，建议优化脉冲压缩算法或提高信噪比。")
+    if velocity_pct < 70:
+        recommendations.append(f"🚀 **测速精度不足**: 当前误差 {accuracy.velocity_error:.1f}m/s 超过阈值 {velocity_threshold}m/s 的30%，建议增加相干积累时间或优化多普勒滤波器。")
+    
+    if not recommendations:
+        st.success("✅ 所有精度指标均在可接受范围内，系统性能良好！")
     else:
-        title_text = "精度可视化对比"
+        for rec in recommendations:
+            st.warning(rec)
     
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True, 
-                range=radial_range,
-                tickvals=[0, 20, 40, 60, 80, 100],
-                ticktext=['0', '20', '40', '60', '80', '100']
-            )
-        ),
-        showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        ),
-        title=title_text,
-        height=400
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # 显示归一化说明
-    with st.expander("📊 归一化说明", expanded=False):
+    # 显示精度评分说明
+    with st.expander("📊 精度评分说明", expanded=False):
         st.markdown("""
-        **两种精度表示方法：**
+        **精度评分机制：**
         
-        1. **剩余精度 (%)**：基于降级百分比计算。显示在当前干扰条件下，各项测量精度相比理想状态的保留比例。
-           - 计算方式：100% - 降级百分比
-           - 优点：反映相对降级程度，显示干扰导致的性能下降
-           
-        2. **归一化分数**：基于误差阈值归一化计算。将实际误差映射到0-100分数，便于不同量纲指标间的直接比较。
-           - 计算方式：100 × (1 - 实际误差 / 阈值)
-           - 阈值设置（基于典型雷达性能）：
-             * 测角误差：≤ {angle_threshold}° 为可接受
-             * 测距误差：≤ {range_threshold} m 为可接受  
-             * 测速误差：≤ {velocity_threshold} m/s 为可接受
-           - 优点：提供绝对性能评估，便于跨指标比较，直观显示是否达到可接受水平
+        每个精度指标使用仪表盘形式展示，评分范围0-100%：
+        - **绿色区域 (70-100%)**: 性能良好，满足要求
+        - **黄色区域 (30-70%)**: 性能一般，需要关注
+        - **红色区域 (0-30%)**: 性能较差，需要优化
         
-        **解读建议：**
-        - 图形越接近外圈（100分）表示精度越好
-        - **剩余精度模式**：绿色区域反映干扰引起的降级程度
-        - **归一化分数模式**：蓝色区域反映绝对性能水平（是否达到阈值要求）
-        - **对比模式**：同时显示两种表示方法，便于综合分析
-        - 红色虚线（对比模式）表示理想基准（100分）
+        **评分计算方式：**
+        - 得分 = 100 × (1 - 实际误差 / 阈值)
+        - 误差越小，得分越高
+        - 误差超过阈值时，得分可能为负（显示为0%）
         
-        **实际应用**：
-        - 剩余精度 < 70% 或归一化分数 < 70 分：建议进行干扰缓解
-        - 剩余精度 < 50% 或归一化分数 < 50 分：强烈建议调整系统配置
-        """.format(
-            angle_threshold=angle_threshold,
-            range_threshold=range_threshold,
-            velocity_threshold=velocity_threshold
-        ))
+        **阈值设置（基于典型雷达性能）：
+        - 测角误差阈值：≤ 2.0° 为可接受
+        - 测距误差阈值：≤ 50m 为可接受  
+        - 测速误差阈值：≤ 5.0m/s 为可接受
+        
+        **实际应用建议**：
+        - 得分 ≥ 70%：性能良好，无需调整
+        - 得分 30-70%：性能一般，建议监控
+        - 得分 < 30%：性能较差，强烈建议优化系统配置
+        """)
 
 
 def render_multipath_results(result):
