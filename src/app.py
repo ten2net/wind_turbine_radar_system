@@ -719,6 +719,7 @@ def render_blocking_results(result):
     # 时域遮挡图
     if blocking.time_series:
         fig = go.Figure()
+        radial_range = [0, 100]  # 默认范围
         fig.add_trace(go.Scatter(
             x=list(range(len(blocking.time_series))),
             y=blocking.time_series,
@@ -772,6 +773,7 @@ def render_scattering_results(result):
     # 距离剖面图
     if scattering.range_profile:
         fig = go.Figure()
+        radial_range = [0, 100]  # 默认范围
         fig.add_trace(go.Scatter(
             x=list(range(len(scattering.range_profile))),
             y=scattering.range_profile,
@@ -825,6 +827,7 @@ def render_doppler_results(result):
     # 多普勒频谱图
     if doppler.spectrum_data:
         fig = go.Figure()
+        radial_range = [0, 100]  # 默认范围
         fig.add_trace(go.Scatter(
             x=doppler.spectrum_data['frequencies'],
             y=doppler.spectrum_data['amplitude'],
@@ -881,9 +884,9 @@ def render_accuracy_results(result):
     
     # 计算归一化精度分数（0-100，100表示完美精度）
     # 分数 = 100 * (1 - error/threshold)，限制在0-100范围内
-    angle_score = max(0.0, min(100.0, 100.0 * (1.0 - accuracy.angle_error / angle_threshold)))
-    range_score = max(0.0, min(100.0, 100.0 * (1.0 - accuracy.range_error / range_threshold)))
-    velocity_score = max(0.0, min(100.0, 100.0 * (1.0 - accuracy.velocity_error / velocity_threshold)))
+    angle_score = max(0.0, min(10000.0, 10000.0 * (1.0 - accuracy.angle_error / angle_threshold)))
+    range_score = max(0.0, min(10000.0, 10000.0 * (1.0 - accuracy.range_error / range_threshold)))
+    velocity_score = max(0.0, min(10000.0, 10000.0 * (1.0 - accuracy.velocity_error / velocity_threshold)))
     
     # 显示模式选择
     st.subheader("📊 精度可视化")
@@ -907,10 +910,13 @@ def render_accuracy_results(result):
         100 - accuracy.velocity_degradation
     ]
     
-    # 数据集2：基于阈值归一化的精度分数
-    normalized_values = [angle_score, range_score, velocity_score]
-    
+    # 数据集2：基于阈值归一化的精度分数（放大100倍，范围0-10000）
+    normalized_values_raw = [angle_score, range_score, velocity_score]
+    normalized_values_scaled = [v / 100.0 for v in normalized_values_raw]  # 缩放回0-100范围
+
     fig = go.Figure()
+    radial_range = [0, 100]  # 默认范围
+    radial_range = [0, 100]  # 默认范围
     
     # 根据显示模式添加轨迹
     if display_mode in ["对比模式（默认）", "剩余精度模式"]:
@@ -925,8 +931,16 @@ def render_accuracy_results(result):
         ))
     
     if display_mode in ["对比模式（默认）", "归一化分数模式"]:
+        # 选择显示的值
+        if display_mode == "归一化分数模式":
+            values_to_use = normalized_values_raw
+            radial_range = [0, 10000]  # 放大100倍后的范围
+        else:  # 对比模式
+            values_to_use = normalized_values_scaled
+            # radial_range 保持默认 [0, 100]
+        
         fig.add_trace(go.Scatterpolar(
-            r=normalized_values + [normalized_values[0]],
+            r=values_to_use + [values_to_use[0]],
             theta=categories + [categories[0]],
             fill='toself',
             name='归一化分数',
@@ -958,7 +972,7 @@ def render_accuracy_results(result):
         polar=dict(
             radialaxis=dict(
                 visible=True, 
-                range=[0, 100],
+                range=radial_range,
                 tickvals=[0, 20, 40, 60, 80, 100],
                 ticktext=['0', '20', '40', '60', '80', '100']
             )
@@ -1137,6 +1151,7 @@ def render_diffraction_results(result):
     simulated_losses = 20 * np.log10(distances / 1000) + np.random.normal(0, 2, len(distances))
     
     fig = go.Figure()
+    radial_range = [0, 100]  # 默认范围
     fig.add_trace(go.Scatter(
         x=distances,
         y=simulated_losses,
