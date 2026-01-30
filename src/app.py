@@ -194,16 +194,20 @@ def render_turbine_config():
     with st.expander("位置信息"):
         col1, col2 = st.columns(2)
         with col1:
-            lat_offset = st.slider("纬度偏移 (km)", -10.0, 10.0, 0.0, 0.1)
+            lat_offset = st.slider("纬度偏移 (km)", -50.0, 50.0, 0.0, 0.1)
         with col2:
-            lon_offset = st.slider("经度偏移 (km)", -10.0, 10.0, 1.0, 0.1)
+            lon_offset = st.slider("经度偏移 (km)", -100.0, 100.0, 1.0, 0.1)
         
         # 计算实际坐标（简化：1度≈111km）
         radar = st.session_state.scene.radar
         turbine_lat = radar.latitude + lat_offset / 111
         turbine_lon = radar.longitude + lon_offset / (111 * np.cos(np.radians(radar.latitude)))
         
-        st.info(f"📍 风机位置: 纬度 {turbine_lat:.6f}, 经度 {turbine_lon:.6f}")
+        # 计算风机到雷达的距离
+        distance_m = calculate_distance(radar.latitude, radar.longitude, turbine_lat, turbine_lon)
+        distance_km = distance_m / 1000
+        
+        st.info(f"📍 风机位置: 纬度 {turbine_lat:.6f}, 经度 {turbine_lon:.6f} | 距离雷达: {distance_km:.2f} km")
     
     # 添加风机按钮
     if st.button("➕ 添加风机", type="primary"):
