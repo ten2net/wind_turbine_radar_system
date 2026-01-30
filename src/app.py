@@ -112,6 +112,10 @@ def render_radar_config():
                 "波束宽度 (度)",
                 min_value=0.1, max_value=10.0, value=radar.beamwidth_deg, step=0.1
             )
+            radar.beam_direction_deg = st.number_input(
+                "波束方向 (度，0=正北)",
+                min_value=0.0, max_value=360.0, value=radar.beam_direction_deg, step=1.0
+            )
             radar.antenna_height_m = st.number_input(
                 "天线高度 (m)",
                 min_value=0.0, max_value=500.0, value=radar.antenna_height_m, step=5.0
@@ -377,18 +381,83 @@ def render_map():
         if radar.max_range_km > 0 and st.session_state.show_coverage:
             # 将最大探测距离转换为米
             max_range_m = radar.max_range_km * 1000
-            # 生成圆形多边形的点（每10度一个点）
+            # 获取波束参数
+            beam_center = radar.beam_direction_deg
+            beam_width = radar.beamwidth_deg
+            
             polygon_points = []
-            for bearing in range(0, 361, 10):  # 包括360度以闭合多边形
+            
+            # 如果波束宽度大于等于360度，显示完整圆形
+            if beam_width >= 360.0:
+                for bearing in range(0, 361, 10):  # 包括360度以闭合多边形
+                    dest_lat, dest_lon = calculate_destination(
+                        radar.latitude, radar.longitude, bearing, max_range_m
+                    )
+                    polygon_points.append([dest_lon, dest_lat])
+            else:
+                # 计算左右边界方位角（归一化到0-360度）
+                left_bearing = (beam_center - beam_width / 2) % 360.0
+                right_bearing = (beam_center + beam_width / 2) % 360.0
+                
+                # 添加雷达中心点作为顶点
+                polygon_points.append([radar.longitude, radar.latitude])
+                
+                # 添加左侧边界点
                 dest_lat, dest_lon = calculate_destination(
-                    radar.latitude, radar.longitude, bearing, max_range_m
+                    radar.latitude, radar.longitude, left_bearing, max_range_m
                 )
-                polygon_points.append([dest_lon, dest_lat])  # 注意：pydeck使用[经度, 纬度]
+                polygon_points.append([dest_lon, dest_lat])
+                
+                # 添加弧线上的点（从左侧到右侧）
+                # 计算步长，确保至少2个点，最多36个点
+                step = max(1.0, beam_width / 20.0)
+                
+                if right_bearing >= left_bearing:
+                    # 不跨越0度
+                    bearing = left_bearing
+                    while bearing <= right_bearing:
+                        dest_lat, dest_lon = calculate_destination(
+                            radar.latitude, radar.longitude, bearing, max_range_m
+                        )
+                        polygon_points.append([dest_lon, dest_lat])
+                        bearing += step
+                    # 确保最后一个点正好是右边界
+                    if polygon_points[-1] != [dest_lon, dest_lat]:
+                        dest_lat, dest_lon = calculate_destination(
+                            radar.latitude, radar.longitude, right_bearing, max_range_m
+                        )
+                        polygon_points.append([dest_lon, dest_lat])
+                else:
+                    # 跨越0度，从左边界到360度，再从0度到右边界
+                    bearing = left_bearing
+                    while bearing <= 360.0:
+                        dest_lat, dest_lon = calculate_destination(
+                            radar.latitude, radar.longitude, bearing, max_range_m
+                        )
+                        polygon_points.append([dest_lon, dest_lat])
+                        bearing += step
+                    # 从0度开始
+                    bearing = 0.0
+                    while bearing <= right_bearing:
+                        dest_lat, dest_lon = calculate_destination(
+                            radar.latitude, radar.longitude, bearing, max_range_m
+                        )
+                        polygon_points.append([dest_lon, dest_lat])
+                        bearing += step
+                    # 确保最后一个点正好是右边界
+                    if polygon_points[-1] != [dest_lon, dest_lat]:
+                        dest_lat, dest_lon = calculate_destination(
+                            radar.latitude, radar.longitude, right_bearing, max_range_m
+                        )
+                        polygon_points.append([dest_lon, dest_lat])
+                
+                # 闭合多边形（回到雷达中心点）
+                polygon_points.append([radar.longitude, radar.latitude])
             
             # 创建多边形数据
             polygon_data = [{
                 'polygon': polygon_points,
-                'color': [0, 255, 0, 40]  # 半透明绿色 (RGBA)
+                'color': [255, 0, 0, 80]  # 半透明红色 (RGBA)
             }]
             
             coverage_layer = pydeck.Layer(

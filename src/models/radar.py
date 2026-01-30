@@ -15,7 +15,8 @@ class RadarConfig:
     frequency_ghz: float = 3.0          # 工作频率(GHz)
     power_kw: float = 100.0             # 发射功率(kW)
     antenna_gain_dbi: float = 35.0      # 天线增益(dBi)
-    beamwidth_deg: float = 1.5          # 波束宽度(度)
+    beamwidth_deg: float = 30          # 波束宽度(度)
+    beam_direction_deg: float = 90.0     # 波束方向(度，0=正北)
     pulse_width_us: float = 1.0         # 脉冲宽度(μs)
     prf_hz: float = 1000.0              # 脉冲重复频率(Hz)
     antenna_height_m: float = 50.0      # 天线高度(m)
@@ -38,6 +39,7 @@ class RadarConfig:
         self.power_kw = max(1.0, min(1000.0, self.power_kw))
         self.antenna_gain_dbi = max(0.0, min(60.0, self.antenna_gain_dbi))
         self.beamwidth_deg = max(0.1, min(10.0, self.beamwidth_deg))
+        self.beam_direction_deg = self.beam_direction_deg % 360.0  # 归一化到0-360
         self.max_range_km = max(10.0, min(500.0, self.max_range_km))
     
     def to_dict(self) -> dict:
@@ -49,6 +51,7 @@ class RadarConfig:
             'power_kw': self.power_kw,
             'antenna_gain_dbi': self.antenna_gain_dbi,
             'beamwidth_deg': self.beamwidth_deg,
+            'beam_direction_deg': self.beam_direction_deg,
             'pulse_width_us': self.pulse_width_us,
             'prf_hz': self.prf_hz,
             'antenna_height_m': self.antenna_height_m,
@@ -69,7 +72,8 @@ class RadarConfig:
             frequency_ghz=data.get('frequency_ghz', 3.0),
             power_kw=data.get('power_kw', 100.0),
             antenna_gain_dbi=data.get('antenna_gain_dbi', 35.0),
-            beamwidth_deg=data.get('beamwidth_deg', 1.5),
+            beamwidth_deg=data.get('beamwidth_deg', 30),
+            beam_direction_deg=data.get('beam_direction_deg', 90.0),
             pulse_width_us=data.get('pulse_width_us', 1.0),
             prf_hz=data.get('prf_hz', 1000.0),
             antenna_height_m=data.get('antenna_height_m', 50.0),
