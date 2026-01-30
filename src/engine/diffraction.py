@@ -9,7 +9,7 @@ from models.radar import RadarConfig
 from models.turbine import Turbine
 from models.target import TargetConfig
 from models.results import DiffractionResult
-from utils.geo_utils import calculate_distance
+from utils.geo_utils import calculate_distance, is_in_beam, is_blocking_path
 
 
 class DiffractionModel:
@@ -19,22 +19,44 @@ class DiffractionModel:
         self.c = 299792458  # 光速 (m/s)
         self.earth_radius = 6371000  # 地球半径 (m)
     
-    def calculate(self, radar: RadarConfig, turbines: List[Turbine], 
+    def calculate(self, radar: RadarConfig, turbines: List[Turbine],
                   target: TargetConfig = None) -> DiffractionResult:
         """
         计算绕射损耗
-        
+
         Args:
             radar: 雷达配置
             turbines: 风机列表
             target: 目标配置（可选）
-            
+
         Returns:
             DiffractionResult: 绕射损耗分析结果
         """
         if not turbines:
             return DiffractionResult()
-        
+
+        # 检查目标是否在波束内
+        if target:
+            target_in_beam, _, _ = is_in_beam(
+                radar.latitude, radar.longitude,
+                radar.altitude_m + radar.antenna_height_m,
+                radar.beam_direction_deg, radar.beamwidth_deg,
+                target.latitude, target.longitude, target.altitude_m,
+                radar.max_range_km
+            )
+            # 如果目标不在波束内，不计算绕射损耗
+            if not target_in_beam:
+                return DiffractionResult(
+                    knife_edge_loss=0.0,
+                    fresnel_zone_clearance=0.0,
+                    blockage_ratio=0.0,
+                    main_lobe_distortion=0.0,
+                    side_lobe_enhancement=0.0,
+                    pattern_asymmetry=0.0,
+                    effective_gain_loss=0.0,
+                    terrain_shadowing=[]
+                )
+
         # 初始化统计
         knife_edge_losses = []
         fresnel_zone_clearances = []
@@ -44,8 +66,35 @@ class DiffractionModel:
         pattern_asymmetries = []
         effective_gain_losses = []
         terrain_shadowing_data = []
-        
+
         for turbine in turbines:
+            # 检查风机是否在波束内
+            turbine_in_beam, _, _ = is_in_beam(
+                radar.latitude, radar.longitude,
+                radar.altitude_m + radar.antenna_height_m,
+                radar.beam_direction_deg, radar.beamwidth_deg,
+                turbine.latitude, turbine.longitude,
+                turbine.altitude_m + turbine.tower_height_m,
+                radar.max_range_km
+            )
+
+            # 如果风机不在波束内，不产生绕射影响
+            if not turbine_in_beam:
+                continue
+
+            # 检查风机是否在雷达和目标之间的路径上（绕射需要风机在视线路径上）
+            if target:
+                is_diffracting, _, _, _ = is_blocking_path(
+                    radar.latitude, radar.longitude,
+                    turbine.latitude, turbine.longitude,
+                    target.latitude, target.longitude,
+                    angular_tolerance=radar.beamwidth_deg / 2
+                )
+
+                # 如果风机不在绕射路径上，不产生绕射影响
+                if not is_diffracting:
+                    continue
+
             # 计算雷达-风机距离
             distance = calculate_distance(
                 radar.latitude, radar.longitude,

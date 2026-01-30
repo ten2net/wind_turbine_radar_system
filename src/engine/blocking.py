@@ -8,6 +8,7 @@ from models.radar import RadarConfig
 from models.turbine import Turbine
 from models.target import TargetConfig
 from models.results import BlockingResult
+from utils.geo_utils import is_in_beam, is_blocking_path
 
 
 class BlockingModel:
@@ -36,25 +37,70 @@ class BlockingModel:
         max_blocking = 0.0
         all_sectors = []
         
+        # 首先检查目标是否在波束内
+        if target:
+            target_in_beam, _, _ = is_in_beam(
+                radar.latitude, radar.longitude, 
+                radar.altitude_m + radar.antenna_height_m,
+                radar.beam_direction_deg, radar.beamwidth_deg,
+                target.latitude, target.longitude, target.altitude_m,
+                radar.max_range_km
+            )
+            # 如果目标不在波束内，遮挡不影响目标检测，返回低风险
+            if not target_in_beam:
+                return BlockingResult(
+                    blocking_factor=0.0,
+                    blocking_duration=0.0,
+                    affected_sectors=[],
+                    time_series=[]
+                )
+        
         for turbine in turbines:
+            # 检查风机是否在雷达波束范围内
+            turbine_in_beam, _, _ = is_in_beam(
+                radar.latitude, radar.longitude,
+                radar.altitude_m + radar.antenna_height_m,
+                radar.beam_direction_deg, radar.beamwidth_deg,
+                turbine.latitude, turbine.longitude,
+                turbine.altitude_m + turbine.tower_height_m,
+                radar.max_range_km
+            )
+
+            # 如果风机不在波束内，跳过（不产生遮挡影响）
+            if not turbine_in_beam:
+                continue
+
+            # 检查风机是否在雷达和目标之间的遮挡路径上
+            if target:
+                is_blocking, distance_rt, distance_r2target, angle_dev = is_blocking_path(
+                    radar.latitude, radar.longitude,
+                    turbine.latitude, turbine.longitude,
+                    target.latitude, target.longitude,
+                    angular_tolerance=radar.beamwidth_deg / 2
+                )
+
+                # 如果风机不在遮挡路径上（比目标远或偏离太多），不产生遮挡
+                if not is_blocking:
+                    continue
+
             # 计算雷达-风机距离
             distance = self._calculate_distance(radar, turbine)
-            
+
             # 计算投影面积
             proj_area = self._calculate_projection(radar, turbine, distance)
-            
+
             # 计算波束截面积
             beam_area = self._calculate_beam_area(radar, distance)
-            
+
             # 计算遮挡因子
             blocking = min(proj_area / beam_area, 1.0) * 100 if beam_area > 0 else 0
-            
+
             # 计算遮挡持续时间
             duration = self._calculate_blocking_duration(turbine, radar, distance)
-            
+
             # 确定受影响扇区
             sector = self._calculate_affected_sector(radar, turbine)
-            
+
             total_blocking += blocking
             max_blocking = max(max_blocking, blocking)
             all_sectors.append({

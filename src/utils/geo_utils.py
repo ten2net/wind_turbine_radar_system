@@ -99,3 +99,88 @@ def calculate_elevation_angle(radar_height: float, target_height: float,
     """
     height_diff = target_height - radar_height
     return np.degrees(np.arctan2(height_diff, distance))
+
+
+def is_in_beam(radar_lat: float, radar_lon: float, radar_height: float,
+               radar_beam_direction: float, radar_beamwidth: float,
+               target_lat: float, target_lon: float, target_height: float,
+               max_range_km: float = 500.0) -> tuple:
+    """
+    检查目标是否在雷达波束范围内
+    
+    Args:
+        radar_lat: 雷达纬度
+        radar_lon: 雷达经度
+        radar_height: 雷达高度（米）
+        radar_beam_direction: 雷达波束中心方向（度，0=正北）
+        radar_beamwidth: 雷达波束宽度（度）
+        target_lat: 目标纬度
+        target_lon: 目标经度
+        target_height: 目标高度（米）
+        max_range_km: 最大探测距离（km）
+        
+    Returns:
+        (是否在波束内, 方位角差, 水平距离米)
+    """
+    # 计算水平距离
+    distance = calculate_distance(radar_lat, radar_lon, target_lat, target_lon)
+    
+    # 检查距离是否在范围内
+    if distance > max_range_km * 1000:
+        return False, float('inf'), distance
+    
+    # 计算目标方位角
+    bearing = calculate_bearing(radar_lat, radar_lon, target_lat, target_lon)
+    
+    # 计算方位角差（考虑0度跨越）
+    angle_diff = abs(bearing - radar_beam_direction)
+    angle_diff = min(angle_diff, 360 - angle_diff)
+    
+    # 检查是否在波束宽度一半以内
+    in_beam = angle_diff <= radar_beamwidth / 2
+    
+    return in_beam, angle_diff, distance
+
+
+def is_blocking_path(radar_lat: float, radar_lon: float,
+                     turbine_lat: float, turbine_lon: float,
+                     target_lat: float, target_lon: float,
+                     angular_tolerance: float = 5.0) -> tuple:
+    """
+    检查风机是否在雷达和目标之间的遮挡路径上
+    
+    几何关系判断：
+    - 只有当风机位于雷达-目标连线上（或附近），且距离雷达比目标近时，才会产生遮挡
+    
+    Args:
+        radar_lat: 雷达纬度
+        radar_lon: 雷达经度
+        turbine_lat: 风机纬度
+        turbine_lon: 风机经度
+        target_lat: 目标纬度
+        target_lon: 目标经度
+        angular_tolerance: 角度容差（度），风机偏离雷达-目标连线的最大角度
+        
+    Returns:
+        (是否产生遮挡, 雷达到风机距离, 雷达到目标距离, 偏离角度)
+    """
+    # 计算距离
+    distance_rt = calculate_distance(radar_lat, radar_lon, turbine_lat, turbine_lon)
+    distance_r2target = calculate_distance(radar_lat, radar_lon, target_lat, target_lon)
+    
+    # 如果风机比目标还远，不会遮挡目标
+    if distance_rt >= distance_r2target:
+        return False, distance_rt, distance_r2target, float('inf')
+    
+    # 计算方位角
+    bearing_to_turbine = calculate_bearing(radar_lat, radar_lon, turbine_lat, turbine_lon)
+    bearing_to_target = calculate_bearing(radar_lat, radar_lon, target_lat, target_lon)
+    
+    # 计算偏离角度
+    angle_deviation = abs(bearing_to_turbine - bearing_to_target)
+    angle_deviation = min(angle_deviation, 360 - angle_deviation)
+    
+    # 检查是否在容差范围内
+    is_blocking = angle_deviation <= angular_tolerance
+    
+    return is_blocking, distance_rt, distance_r2target, angle_deviation

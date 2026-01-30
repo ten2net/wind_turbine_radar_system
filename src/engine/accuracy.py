@@ -8,6 +8,7 @@ from models.radar import RadarConfig
 from models.turbine import Turbine
 from models.target import TargetConfig
 from models.results import AccuracyResult
+from utils.geo_utils import is_in_beam
 
 
 class AccuracyModel:
@@ -19,22 +20,43 @@ class AccuracyModel:
         from .scattering import ScatteringModel
         self.scattering_model = scattering_model or ScatteringModel()
     
-    def calculate(self, radar: RadarConfig, turbines: List[Turbine], 
+    def calculate(self, radar: RadarConfig, turbines: List[Turbine],
                   target: TargetConfig) -> AccuracyResult:
         """
         计算精度偏差
-        
+
         Args:
             radar: 雷达配置
             turbines: 风机列表
             target: 目标配置
-            
+
         Returns:
             AccuracyResult: 精度分析结果
         """
         if not turbines:
             return AccuracyResult()
-        
+
+        # 检查目标是否在波束内
+        target_in_beam, _, _ = is_in_beam(
+            radar.latitude, radar.longitude,
+            radar.altitude_m + radar.antenna_height_m,
+            radar.beam_direction_deg, radar.beamwidth_deg,
+            target.latitude, target.longitude, target.altitude_m,
+            radar.max_range_km
+        )
+
+        # 如果目标不在波束内，不计算精度偏差
+        if not target_in_beam:
+            return AccuracyResult(
+                angle_error=0.0,
+                range_error=0.0,
+                velocity_error=0.0,
+                angle_degradation=0.0,
+                range_degradation=0.0,
+                velocity_degradation=0.0,
+                overall_degradation=0.0
+            )
+
         # 获取散射干扰数据
         scattering = self.scattering_model.calculate(radar, turbines, target)
         

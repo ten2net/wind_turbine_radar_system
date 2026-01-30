@@ -8,6 +8,7 @@ from models.radar import RadarConfig
 from models.turbine import Turbine
 from models.target import TargetConfig
 from models.results import ScatteringResult
+from utils.geo_utils import is_in_beam, is_blocking_path
 
 
 class ScatteringModel:
@@ -22,52 +23,93 @@ class ScatteringModel:
         self.system_loss_db = system_loss_db
         self.system_loss_linear = 10 ** (system_loss_db / 10)
     
-    def calculate(self, radar: RadarConfig, turbines: List[Turbine], 
+    def calculate(self, radar: RadarConfig, turbines: List[Turbine],
                   target: TargetConfig) -> ScatteringResult:
         """
         计算散射干扰
-        
+
         Args:
             radar: 雷达配置
             turbines: 风机列表
             target: 目标配置
-            
+
         Returns:
             ScatteringResult: 散射分析结果
         """
         if not turbines:
             return ScatteringResult()
-        
+
         # 计算波长
         wavelength = self.C / (radar.frequency_ghz * 1e9)
-        
-        # 计算目标距离（假设目标在雷达最大探测距离处，3度仰角）
-        target_distance = target.altitude_m / np.tan(np.radians(3))
-        target_distance = min(target_distance, radar.max_range_km * 1000)
-        
+
+        # 检查目标是否在波束内
+        target_in_beam, _, target_distance = is_in_beam(
+            radar.latitude, radar.longitude,
+            radar.altitude_m + radar.antenna_height_m,
+            radar.beam_direction_deg, radar.beamwidth_deg,
+            target.latitude, target.longitude, target.altitude_m,
+            radar.max_range_km
+        )
+
+        # 如果目标不在波束内，没有目标回波，不计算干扰
+        if not target_in_beam:
+            return ScatteringResult(
+                interference_power=-200.0,
+                target_power=-200.0,
+                sjr=float('inf'),
+                sjr_degradation=0.0,
+                affected_turbines=[],
+                range_profile=[]
+            )
+
         # 计算目标回波功率
         target_power = self._calculate_radar_return(
             radar, target.rcs_dbsm, target_distance, wavelength
         )
-        
+
         # 计算各风机干扰功率
         turbine_powers = []
         total_interference = 0.0
-        
+
         for turbine in turbines:
-            distance = self._calculate_distance(radar, turbine)
-            power = self._calculate_radar_return(
-                radar, turbine.rcs_dbsm, distance, wavelength
+            # 检查风机是否在波束内
+            turbine_in_beam, _, turbine_distance = is_in_beam(
+                radar.latitude, radar.longitude,
+                radar.altitude_m + radar.antenna_height_m,
+                radar.beam_direction_deg, radar.beamwidth_deg,
+                turbine.latitude, turbine.longitude,
+                turbine.altitude_m + turbine.tower_height_m,
+                radar.max_range_km
             )
-            
+
+            # 如果风机不在波束内，不产生散射干扰
+            if not turbine_in_beam:
+                continue
+
+            # 检查风机是否在雷达和目标之间的路径上（散射干扰主要来自路径上的风机）
+            is_scattering, _, _, _ = is_blocking_path(
+                radar.latitude, radar.longitude,
+                turbine.latitude, turbine.longitude,
+                target.latitude, target.longitude,
+                angular_tolerance=radar.beamwidth_deg
+            )
+
+            # 如果风机不在散射路径上，干扰较小（可忽略）
+            if not is_scattering:
+                continue
+
+            power = self._calculate_radar_return(
+                radar, turbine.rcs_dbsm, turbine_distance, wavelength
+            )
+
             turbine_powers.append({
                 'turbine_id': turbine.turbine_id,
                 'turbine_name': turbine.name,
-                'distance_km': round(distance / 1000, 2),
+                'distance_km': round(turbine_distance / 1000, 2),
                 'rcs_dbsm': turbine.rcs_dbsm,
                 'power_dbm': round(power, 2)
             })
-            
+
             # 非相干叠加（功率相加）
             total_interference += 10 ** (power / 10)
         

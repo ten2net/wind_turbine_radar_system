@@ -9,7 +9,7 @@ from models.radar import RadarConfig
 from models.turbine import Turbine
 from models.target import TargetConfig
 from models.results import MultipathResult
-from utils.geo_utils import calculate_distance
+from utils.geo_utils import calculate_distance, is_in_beam, is_blocking_path
 
 
 class MultipathModel:
@@ -19,22 +19,45 @@ class MultipathModel:
         self.c = 299792458  # 光速 (m/s)
         self.fresnel_zone_order = 1  # 菲涅尔区阶数
     
-    def calculate(self, radar: RadarConfig, turbines: List[Turbine], 
+    def calculate(self, radar: RadarConfig, turbines: List[Turbine],
                   target: TargetConfig = None) -> MultipathResult:
         """
         计算多径效应
-        
+
         Args:
             radar: 雷达配置
             turbines: 风机列表
             target: 目标配置（可选）
-            
+
         Returns:
             MultipathResult: 多径效应分析结果
         """
         if not turbines:
             return MultipathResult()
-        
+
+        # 检查目标是否在波束内
+        if target:
+            target_in_beam, _, _ = is_in_beam(
+                radar.latitude, radar.longitude,
+                radar.altitude_m + radar.antenna_height_m,
+                radar.beam_direction_deg, radar.beamwidth_deg,
+                target.latitude, target.longitude, target.altitude_m,
+                radar.max_range_km
+            )
+            # 如果目标不在波束内，不计算多径效应
+            if not target_in_beam:
+                return MultipathResult(
+                    peak_to_null_ratio=0.0,
+                    fading_depth=0.0,
+                    fading_frequency=0.0,
+                    multipath_distance=0.0,
+                    delay_spread=0.0,
+                    constructive_count=0,
+                    destructive_count=0,
+                    pattern_distortion=0.0,
+                    phase_shift_deg=0.0
+                )
+
         # 初始化统计
         peak_to_null_ratios = []
         fading_depths = []
@@ -45,8 +68,35 @@ class MultipathModel:
         destructive_count = 0
         pattern_distortions = []
         phase_shifts = []
-        
+
         for turbine in turbines:
+            # 检查风机是否在波束内
+            turbine_in_beam, _, _ = is_in_beam(
+                radar.latitude, radar.longitude,
+                radar.altitude_m + radar.antenna_height_m,
+                radar.beam_direction_deg, radar.beamwidth_deg,
+                turbine.latitude, turbine.longitude,
+                turbine.altitude_m + turbine.tower_height_m,
+                radar.max_range_km
+            )
+
+            # 如果风机不在波束内，不产生多径效应
+            if not turbine_in_beam:
+                continue
+
+            # 检查风机是否在雷达和目标之间的路径上（多径效应主要来自路径上的风机）
+            if target:
+                is_multipath, _, _, _ = is_blocking_path(
+                    radar.latitude, radar.longitude,
+                    turbine.latitude, turbine.longitude,
+                    target.latitude, target.longitude,
+                    angular_tolerance=radar.beamwidth_deg
+                )
+
+                # 如果风机不在多径路径上，不产生显著多径效应
+                if not is_multipath:
+                    continue
+
             # 计算直接路径距离
             direct_distance = calculate_distance(
                 radar.latitude, radar.longitude,

@@ -8,6 +8,7 @@ from models.radar import RadarConfig
 from models.turbine import Turbine
 from models.target import TargetConfig
 from models.results import DopplerResult
+from utils.geo_utils import is_in_beam, is_blocking_path
 
 
 class DopplerModel:
@@ -15,41 +16,87 @@ class DopplerModel:
     
     C = 299792458  # 光速 (m/s)
     
-    def calculate(self, radar: RadarConfig, turbines: List[Turbine], 
+    def calculate(self, radar: RadarConfig, turbines: List[Turbine],
                   target: TargetConfig) -> DopplerResult:
         """
         计算多普勒效应
-        
+
         Args:
             radar: 雷达配置
             turbines: 风机列表
             target: 目标配置
-            
+
         Returns:
             DopplerResult: 多普勒分析结果
         """
         if not turbines:
             return DopplerResult()
-        
+
+        # 检查目标是否在波束内
+        target_in_beam, _, _ = is_in_beam(
+            radar.latitude, radar.longitude,
+            radar.altitude_m + radar.antenna_height_m,
+            radar.beam_direction_deg, radar.beamwidth_deg,
+            target.latitude, target.longitude, target.altitude_m,
+            radar.max_range_km
+        )
+
+        # 如果目标不在波束内，多普勒干扰不影响目标检测
+        if not target_in_beam:
+            return DopplerResult(
+                max_doppler_shift=0.0,
+                doppler_bandwidth=0.0,
+                affected_filters=[],
+                mti_degradation=0.0,
+                spectrum_data={'frequencies': [], 'amplitude': [], 'prf': radar.prf_hz},
+                velocity_spread=0.0
+            )
+
         max_shift = 0.0
         max_bandwidth = 0.0
         max_velocity = 0.0
-        
+
         for turbine in turbines:
+            # 检查风机是否在波束内
+            turbine_in_beam, _, _ = is_in_beam(
+                radar.latitude, radar.longitude,
+                radar.altitude_m + radar.antenna_height_m,
+                radar.beam_direction_deg, radar.beamwidth_deg,
+                turbine.latitude, turbine.longitude,
+                turbine.altitude_m + turbine.tower_height_m,
+                radar.max_range_km
+            )
+
+            # 如果风机不在波束内，不产生多普勒干扰
+            if not turbine_in_beam:
+                continue
+
+            # 检查风机是否在雷达和目标之间的路径上
+            is_interfering, _, _, _ = is_blocking_path(
+                radar.latitude, radar.longitude,
+                turbine.latitude, turbine.longitude,
+                target.latitude, target.longitude,
+                angular_tolerance=radar.beamwidth_deg
+            )
+
+            # 如果风机不在干扰路径上，对目标的多普勒干扰较小
+            if not is_interfering:
+                continue
+
             # 计算叶片尖端速度
             tip_velocity = self._calculate_tip_velocity(turbine)
-            
+
             # 计算多普勒频移
             doppler_shift = self._calculate_doppler_shift(
                 tip_velocity, radar.frequency_ghz
             )
-            
+
             # 计算多普勒带宽（叶片速度范围）
             doppler_bw = doppler_shift  # 从0到最大值
-            
+
             # 计算速度展宽
             velocity_spread = tip_velocity
-            
+
             max_shift = max(max_shift, doppler_shift)
             max_bandwidth = max(max_bandwidth, doppler_bw)
             max_velocity = max(max_velocity, velocity_spread)
