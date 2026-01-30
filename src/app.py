@@ -635,6 +635,162 @@ def render_accuracy_results(result):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_multipath_results(result):
+    """渲染多径效应分析结果"""
+    multipath = result.multipath
+    
+    # 指标卡片
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            label="峰谷比",
+            value=f"{multipath.peak_to_null_ratio:.1f} dB",
+            delta=f"衰落深度 {multipath.fading_depth:.1f} dB"
+        )
+    
+    with col2:
+        st.metric(
+            label="多径距离差",
+            value=f"{multipath.multipath_distance:.1f} m",
+            delta=f"时延扩展 {multipath.delay_spread:.1f} ns"
+        )
+    
+    with col3:
+        if multipath.constructive_count > multipath.destructive_count:
+            delta_text = f"同相叠加 {multipath.constructive_count} 次"
+        else:
+            delta_text = f"反相抵消 {multipath.destructive_count} 次"
+        st.metric(
+            label="相位偏移",
+            value=f"{multipath.phase_shift_deg:.1f}°",
+            delta=delta_text
+        )
+    
+    # 多径效应统计
+    st.info(f"🌊 多径效应统计: 同相叠加 {multipath.constructive_count} 次 | 反相抵消 {multipath.destructive_count} 次 | 方向图畸变 {multipath.pattern_distortion:.1f}°")
+    
+    # 多径衰落频率显示
+    st.subheader("多径衰落特性")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("衰落频率", f"{multipath.fading_frequency:.2f} Hz")
+    with col2:
+        st.metric("相位变化", f"{multipath.phase_shift_deg:.1f}°")
+    
+    # 多径影响雷达图
+    categories = ['峰谷比', '衰落深度', '相位偏移', '方向图畸变']
+    values = [
+        max(0, 60 - multipath.peak_to_null_ratio) / 60 * 100,  # 峰谷比越小越好
+        max(0, 40 - multipath.fading_depth) / 40 * 100,         # 衰落深度越小越好
+        max(0, 180 - abs(multipath.phase_shift_deg - 180)) / 180 * 100,  # 相位偏移接近180度最好
+        max(0, 30 - multipath.pattern_distortion) / 30 * 100    # 方向图畸变越小越好
+    ]
+    
+    fig = go.Figure(data=go.Scatterpolar(
+        r=values + [values[0]],
+        theta=categories + [categories[0]],
+        fill='toself',
+        name='多径影响指标',
+        line_color='blue',
+        fillcolor='rgba(0, 0, 255, 0.2)'
+    ))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+        showlegend=False,
+        title="多径效应影响评估",
+        height=350
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_diffraction_results(result):
+    """渲染绕射损耗分析结果"""
+    diffraction = result.diffraction
+    
+    # 指标卡片
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            label="刃形绕射损耗",
+            value=f"{diffraction.knife_edge_loss:.1f} dB",
+            delta=f"菲涅尔余隙 {diffraction.fresnel_zone_clearance:.1f} m"
+        )
+    
+    with col2:
+        st.metric(
+            label="主瓣畸变",
+            value=f"{diffraction.main_lobe_distortion:.1f} dB",
+            delta=f"副瓣增强 {diffraction.side_lobe_enhancement:.1f} dB"
+        )
+    
+    with col3:
+        st.metric(
+            label="有效增益损失",
+            value=f"{diffraction.effective_gain_loss:.1f} dB",
+            delta=f"不对称度 {diffraction.pattern_asymmetry:.1f}"
+        )
+    
+    # 绕射遮挡比显示
+    st.info(f"🗻 绕射遮挡比: {diffraction.blockage_ratio:.2f} | 方向图不对称度: {diffraction.pattern_asymmetry:.1f}")
+    
+    # 绕射影响分析
+    st.subheader("绕射影响详情")
+    
+    if diffraction.terrain_shadowing:
+        # 显示地形遮蔽数据
+        terrain_df = pd.DataFrame([
+            {
+                '风机名称': item['turbine_name'],
+                '距离 (m)': round(item['distance'], 1),
+                '障碍物高度 (m)': round(item['obstacle_height'], 1),
+                '菲涅尔区半径 (m)': round(item['fresnel_zone_radius'], 1),
+                '余隙 (m)': round(item['fresnel_clearance'], 1),
+                '绕射损耗 (dB)': round(item['knife_edge_loss'], 1),
+                '遮挡比': round(item['blockage_ratio'], 2)
+            }
+            for item in diffraction.terrain_shadowing
+        ])
+        st.dataframe(terrain_df, use_container_width=True)
+    
+    # 绕射损耗与距离关系图（简化）
+    st.subheader("绕射损耗趋势")
+    
+    # 生成模拟数据
+    distances = np.linspace(1000, 10000, 10)  # 1-10km
+    simulated_losses = 20 * np.log10(distances / 1000) + np.random.normal(0, 2, len(distances))
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=distances,
+        y=simulated_losses,
+        mode='lines+markers',
+        name='绕射损耗趋势',
+        line=dict(color='orange', width=2),
+        marker=dict(size=8, color='red')
+    ))
+    
+    # 添加当前点
+    if diffraction.terrain_shadowing:
+        avg_distance = np.mean([item['distance'] for item in diffraction.terrain_shadowing])
+        fig.add_trace(go.Scatter(
+            x=[avg_distance],
+            y=[diffraction.knife_edge_loss],
+            mode='markers',
+            name='当前配置',
+            marker=dict(size=12, color='green', symbol='star')
+        ))
+    
+    fig.update_layout(
+        title="绕射损耗随距离变化趋势",
+        xaxis_title="距离 (m)",
+        yaxis_title="绕射损耗 (dB)",
+        height=300
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def render_results():
     """渲染评估结果"""
     result = st.session_state.evaluation_result
@@ -667,7 +823,7 @@ def render_results():
             st.info(rec)
     
     # 详细结果标签页
-    tabs = st.tabs(["🚫 遮挡分析", "📡 散射分析", "🌊 多普勒分析", "🎯 精度分析"])
+    tabs = st.tabs(["🚫 遮挡分析", "📡 散射分析", "🌊 多普勒分析", "🎯 精度分析", "🌊 多径效应", "🗻 绕射损耗"])
     
     with tabs[0]:
         render_blocking_results(result)
@@ -680,6 +836,12 @@ def render_results():
     
     with tabs[3]:
         render_accuracy_results(result)
+    
+    with tabs[4]:
+        render_multipath_results(result)
+    
+    with tabs[5]:
+        render_diffraction_results(result)
 
 
 def get_risk_class(risk_level: str) -> str:

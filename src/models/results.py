@@ -141,6 +141,82 @@ class AccuracyResult:
 
 
 @dataclass
+class MultipathResult:
+    """多径效应分析结果"""
+    peak_to_null_ratio: float = 0.0       # 峰谷比 (dB)
+    fading_depth: float = 0.0             # 衰落深度 (dB)
+    fading_frequency: float = 0.0         # 衰落频率 (Hz)
+    multipath_distance: float = 0.0       # 多径距离差 (m)
+    delay_spread: float = 0.0             # 时延扩展 (ns)
+    constructive_count: int = 0           # 同向叠加次数
+    destructive_count: int = 0            # 反向抵消次数
+    pattern_distortion: float = 0.0       # 方向图畸变度
+    phase_shift_deg: float = 0.0          # 相位偏移 (度)
+    
+    def get_risk_level(self) -> str:
+        """获取风险等级"""
+        if self.fading_depth < 10:
+            return "低风险"
+        elif self.fading_depth < 20:
+            return "中等风险"
+        elif self.fading_depth < 30:
+            return "高风险"
+        else:
+            return "极高风险"
+    
+    def to_dict(self) -> dict:
+        return {
+            'peak_to_null_ratio': self.peak_to_null_ratio,
+            'fading_depth': self.fading_depth,
+            'fading_frequency': self.fading_frequency,
+            'multipath_distance': self.multipath_distance,
+            'delay_spread': self.delay_spread,
+            'constructive_count': self.constructive_count,
+            'destructive_count': self.destructive_count,
+            'pattern_distortion': self.pattern_distortion,
+            'phase_shift_deg': self.phase_shift_deg,
+            'risk_level': self.get_risk_level()
+        }
+
+
+@dataclass
+class DiffractionResult:
+    """绕射损耗分析结果"""
+    knife_edge_loss: float = 0.0          # 刃形绕射损耗 (dB)
+    fresnel_zone_clearance: float = 0.0   # 菲涅尔区余隙 (m)
+    blockage_ratio: float = 0.0           # 绕射遮挡比
+    main_lobe_distortion: float = 0.0     # 主瓣畸变 (dB)
+    side_lobe_enhancement: float = 0.0    # 副瓣增强 (dB)
+    pattern_asymmetry: float = 0.0        # 方向图不对称度
+    effective_gain_loss: float = 0.0      # 有效增益损失 (dB)
+    terrain_shadowing: List[dict] = field(default_factory=list)  # 地形遮蔽分析
+    
+    def get_risk_level(self) -> str:
+        """获取风险等级"""
+        if self.knife_edge_loss < 6:
+            return "低风险"
+        elif self.knife_edge_loss < 12:
+            return "中等风险"
+        elif self.knife_edge_loss < 20:
+            return "高风险"
+        else:
+            return "极高风险"
+    
+    def to_dict(self) -> dict:
+        return {
+            'knife_edge_loss': self.knife_edge_loss,
+            'fresnel_zone_clearance': self.fresnel_zone_clearance,
+            'blockage_ratio': self.blockage_ratio,
+            'main_lobe_distortion': self.main_lobe_distortion,
+            'side_lobe_enhancement': self.side_lobe_enhancement,
+            'pattern_asymmetry': self.pattern_asymmetry,
+            'effective_gain_loss': self.effective_gain_loss,
+            'terrain_shadowing': self.terrain_shadowing,
+            'risk_level': self.get_risk_level()
+        }
+
+
+@dataclass
 class EvaluationResult:
     """综合评估结果"""
     
@@ -149,6 +225,8 @@ class EvaluationResult:
     scattering: ScatteringResult = field(default_factory=ScatteringResult)
     doppler: DopplerResult = field(default_factory=DopplerResult)
     accuracy: AccuracyResult = field(default_factory=AccuracyResult)
+    multipath: MultipathResult = field(default_factory=MultipathResult)
+    diffraction: DiffractionResult = field(default_factory=DiffractionResult)
     
     # 评估元信息
     evaluation_time: str = ""
@@ -160,7 +238,9 @@ class EvaluationResult:
             self.blocking.get_risk_level(),
             self.scattering.get_risk_level(),
             self.doppler.get_risk_level(),
-            self.accuracy.get_risk_level()
+            self.accuracy.get_risk_level(),
+            self.multipath.get_risk_level(),
+            self.diffraction.get_risk_level()
         ]
         
         if "极高风险" in risks:
@@ -185,7 +265,9 @@ class EvaluationResult:
             risk_scores.get(self.blocking.get_risk_level(), 50),
             risk_scores.get(self.scattering.get_risk_level(), 50),
             risk_scores.get(self.doppler.get_risk_level(), 50),
-            risk_scores.get(self.accuracy.get_risk_level(), 50)
+            risk_scores.get(self.accuracy.get_risk_level(), 50),
+            risk_scores.get(self.multipath.get_risk_level(), 50),
+            risk_scores.get(self.diffraction.get_risk_level(), 50)
         ]
         
         return np.mean(scores)
@@ -210,6 +292,14 @@ class EvaluationResult:
         if self.accuracy.overall_degradation > 40:
             recommendations.append("测量精度降级明显，建议进行干扰对消处理")
         
+        # 多径效应建议
+        if self.multipath.fading_depth > 20:
+            recommendations.append("多径衰落严重，建议使用空间分集或频率分集技术")
+        
+        # 绕射损耗建议
+        if self.diffraction.knife_edge_loss > 12:
+            recommendations.append("绕射损耗较大，建议提升雷达天线高度或优化传输路径")
+        
         if not recommendations:
             recommendations.append("当前配置下干扰影响在可接受范围内")
         
@@ -221,6 +311,8 @@ class EvaluationResult:
             'scattering': self.scattering.to_dict(),
             'doppler': self.doppler.to_dict(),
             'accuracy': self.accuracy.to_dict(),
+            'multipath': self.multipath.to_dict(),
+            'diffraction': self.diffraction.to_dict(),
             'evaluation_time': self.evaluation_time,
             'scene_name': self.scene_name,
             'overall_risk': self.get_overall_risk(),

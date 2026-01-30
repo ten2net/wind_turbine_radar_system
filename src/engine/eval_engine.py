@@ -14,6 +14,8 @@ from .blocking import BlockingModel
 from .scattering import ScatteringModel
 from .doppler import DopplerModel
 from .accuracy import AccuracyModel
+from .multipath import MultipathModel
+from .diffraction import DiffractionModel
 
 
 class EvalEngine:
@@ -24,6 +26,8 @@ class EvalEngine:
         self.scattering_model = ScatteringModel()
         self.doppler_model = DopplerModel()
         self.accuracy_model = AccuracyModel(self.scattering_model)
+        self.multipath_model = MultipathModel()
+        self.diffraction_model = DiffractionModel()
     
     def evaluate(self, scene: Scene) -> EvaluationResult:
         """
@@ -44,12 +48,16 @@ class EvalEngine:
         scattering_result = self.scattering_model.calculate(radar, turbines, target)
         doppler_result = self.doppler_model.calculate(radar, turbines, target)
         accuracy_result = self.accuracy_model.calculate(radar, turbines, target)
+        multipath_result = self.multipath_model.calculate(radar, turbines, target)
+        diffraction_result = self.diffraction_model.calculate(radar, turbines, target)
         
         return EvaluationResult(
             blocking=blocking_result,
             scattering=scattering_result,
             doppler=doppler_result,
             accuracy=accuracy_result,
+            multipath=multipath_result,
+            diffraction=diffraction_result,
             evaluation_time=datetime.now().isoformat(),
             scene_name=scene.name
         )
@@ -69,3 +77,11 @@ class EvalEngine:
     def evaluate_accuracy(self, scene: Scene):
         """仅执行精度评估"""
         return self.accuracy_model.calculate(scene.radar, scene.turbines, scene.target)
+    
+    def evaluate_multipath(self, scene: Scene):
+        """仅执行多径效应评估"""
+        return self.multipath_model.calculate(scene.radar, scene.turbines, scene.target)
+    
+    def evaluate_diffraction(self, scene: Scene):
+        """仅执行绕射损耗评估"""
+        return self.diffraction_model.calculate(scene.radar, scene.turbines, scene.target)

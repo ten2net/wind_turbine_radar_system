@@ -5,6 +5,8 @@ from .blocking import BlockingModel
 from .scattering import ScatteringModel
 from .doppler import DopplerModel
 from .accuracy import AccuracyModel
+from .multipath import MultipathModel
+from .diffraction import DiffractionModel
 from .eval_engine import EvalEngine
 
 __all__ = [
@@ -12,5 +14,7 @@ __all__ = [
     'ScatteringModel',
     'DopplerModel',
     'AccuracyModel',
+    'MultipathModel',
+    'DiffractionModel',
     'EvalEngine'
 ]

@@ -10,6 +10,8 @@ from .results import (
     ScatteringResult, 
     DopplerResult, 
     AccuracyResult,
+    MultipathResult,
+    DiffractionResult,
     EvaluationResult
 )
 
@@ -22,5 +24,7 @@ __all__ = [
     'ScatteringResult',
     'DopplerResult',
     'AccuracyResult',
+    'MultipathResult',
+    'DiffractionResult',
     'EvaluationResult'
 ]
