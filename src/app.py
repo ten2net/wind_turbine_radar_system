@@ -33,6 +33,22 @@ if 'evaluation_result' not in st.session_state:
 if 'map_center' not in st.session_state:
     st.session_state.map_center = [39.9042, 120.4074]
 
+# 初始化偏移量状态（用于连续添加风机）
+if 'lat_offset_slider' not in st.session_state:
+    st.session_state.lat_offset_slider = 0.0  # 纬度偏移滑块值
+if 'lon_offset_slider' not in st.session_state:
+    st.session_state.lon_offset_slider = 1.0  # 经度偏移滑块值（与滑块默认值一致）
+if 'tian_count' not in st.session_state:
+    st.session_state.tian_count = 0  # 当前田字形中的风机计数（0-3）
+if 'tian_base_lat_offset' not in st.session_state:
+    st.session_state.tian_base_lat_offset = 0.0  # 田字形基准纬度偏移
+if 'tian_base_lon_offset' not in st.session_state:
+    st.session_state.tian_base_lon_offset = 1.0  # 田字形基准经度偏移
+if 'pending_lat_offset' not in st.session_state:
+    st.session_state.pending_lat_offset = None  # 待处理的纬度偏移更新
+if 'pending_lon_offset' not in st.session_state:
+    st.session_state.pending_lon_offset = None  # 待处理的经度偏移更新
+
 # 自定义CSS样式
 st.markdown("""
 <style>
@@ -148,6 +164,14 @@ def render_radar_config():
 
 def render_turbine_config():
     """渲染风机参数配置"""
+    # 处理pending偏移量更新（必须在滑块渲染之前）
+    if st.session_state.pending_lat_offset is not None and st.session_state.pending_lon_offset is not None:
+        st.session_state.lat_offset_slider = st.session_state.pending_lat_offset
+        st.session_state.lon_offset_slider = st.session_state.pending_lon_offset
+        # 清除pending值
+        st.session_state.pending_lat_offset = None
+        st.session_state.pending_lon_offset = None
+    
     st.subheader("🌪️ 风机参数配置")
     
     # 预设型号选择
@@ -198,9 +222,9 @@ def render_turbine_config():
     with st.expander("位置信息"):
         col1, col2 = st.columns(2)
         with col1:
-            lat_offset = st.slider("纬度偏移 (km)", -50.0, 50.0, 0.0, 0.1)
+            lat_offset = st.slider("纬度偏移 (km)", -50.0, 50.0, st.session_state.lat_offset_slider, 0.1, key="lat_offset_slider")
         with col2:
-            lon_offset = st.slider("经度偏移 (km)", -100.0, 100.0, 1.0, 0.1)
+            lon_offset = st.slider("经度偏移 (km)", -100.0, 100.0, st.session_state.lon_offset_slider, 0.1, key="lon_offset_slider")
         
         # 计算实际坐标（简化：1度≈111km）
         radar = st.session_state.scene.radar
@@ -229,7 +253,37 @@ def render_turbine_config():
         )
         st.session_state.scene.add_turbine(new_turbine)
         st.success(f"✅ 已添加风机: {turbine_name}")
-        # st.rerun()
+        
+        # 更新偏移量以实现连续添加和田字形布局
+        # 获取当前滑块值（添加风机前的位置）
+        current_lat_offset = lat_offset
+        current_lon_offset = lon_offset
+        
+        # 如果是田字形的第一个风机，设置基准偏移量
+        if st.session_state.tian_count == 0:
+            st.session_state.tian_base_lat_offset = current_lat_offset
+            st.session_state.tian_base_lon_offset = current_lon_offset
+        
+        # 增加田字形计数
+        st.session_state.tian_count += 1
+        
+        # 计算新的偏移量：每个风机后都增加0.5km
+        new_lat_offset = current_lat_offset + 0.5
+        new_lon_offset = current_lon_offset + 0.5
+        
+        # 如果完成一个田字形（4个风机），向东平移2km，纬度重置
+        if st.session_state.tian_count == 4:
+            new_lon_offset = st.session_state.tian_base_lon_offset + 2.0  # 向东平移2km
+            new_lat_offset = st.session_state.tian_base_lat_offset  # 纬度重置到基准
+            st.session_state.tian_base_lon_offset = new_lon_offset  # 更新基准经度偏移，以便下一个田字形继续向东平移
+            st.session_state.tian_count = 0  # 重置计数
+        
+        # 将新的偏移量存储到pending变量中，下次渲染时更新滑块
+        # 确保偏移量在滑块范围内
+        new_lat_offset = max(-50.0, min(50.0, new_lat_offset))
+        new_lon_offset = max(-100.0, min(100.0, new_lon_offset))
+        st.session_state.pending_lat_offset = new_lat_offset
+        st.session_state.pending_lon_offset = new_lon_offset
 
 
 def render_target_config():
