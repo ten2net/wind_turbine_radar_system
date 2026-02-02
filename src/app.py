@@ -37,7 +37,7 @@ if 'map_center' not in st.session_state:
 if 'lat_offset_slider' not in st.session_state:
     st.session_state.lat_offset_slider = 0.0  # 纬度偏移滑块值
 if 'lon_offset_slider' not in st.session_state:
-    st.session_state.lon_offset_slider = 1.0  # 经度偏移滑块值（与滑块默认值一致）
+    st.session_state.lon_offset_slider = 5.0  # 经度偏移滑块值（与滑块默认值一致）
 if 'tian_count' not in st.session_state:
     st.session_state.tian_count = 0  # 当前田字形中的风机计数（0-3）
 if 'tian_base_lat_offset' not in st.session_state:
@@ -384,7 +384,7 @@ def render_turbine_list():
     if st.button("🗑️ 清空所有风机"):
         st.session_state.scene.clear_turbines()
         st.success("✅ 已清空所有风机")
-        # st.rerun()
+        st.experimental_rerun()
 
 def get_icon_data(icon: str) -> dict:
     """获取图标数据"""
