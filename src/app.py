@@ -494,6 +494,111 @@ def calculate_turbine_impact_zones(radar, turbines, max_range_km):
     return impact_zones
 
 
+def calculate_combined_blocked_polygon(radar, turbines, max_range_km):
+    """
+    计算所有风机合并的遮挡区域多边形（风机后面的扇形子区域）
+    
+    Args:
+        radar: 雷达配置对象
+        turbines: 风机列表
+        max_range_km: 最大探测距离（km）
+        
+    Returns:
+        polygon_points: 合并遮挡区域的多边形点列表 [[lon, lat], ...]
+    """
+    if not turbines:
+        return []
+    
+    # 计算雷达的扇形参数
+    beam_center = radar.beam_direction_deg
+    beam_width = radar.beamwidth_deg
+    max_range_m = max_range_km * 1000
+    
+    # 获取每个风机的位置
+    turbine_points = []
+    for turbine in turbines:
+        # 计算风机的方位角和距离
+        bearing = calculate_bearing(radar.latitude, radar.longitude, turbine.latitude, turbine.longitude)
+        distance = calculate_distance(radar.latitude, radar.longitude, turbine.latitude, turbine.longitude)
+        
+        # 检查风机是否在雷达的扇形覆盖范围内
+        angle_diff = abs(bearing - beam_center)
+        angle_diff = min(angle_diff, 360 - angle_diff)
+        
+        if angle_diff <= beam_width / 2:
+            # 风机在扇形范围内，计算其后面的遮挡区域
+            turbine_points.append({
+                'lon': turbine.longitude,
+                'lat': turbine.latitude,
+                'bearing': bearing,
+                'distance': distance
+            })
+    
+    if not turbine_points:
+        return []
+    
+    # 按方位角排序
+    turbine_points.sort(key=lambda p: p['bearing'])
+    
+    # 构建遮挡区域多边形（风机后面的扇形子区域）
+    blocked_polygon = []
+    
+    # 计算每个风机的遮挡扇区并合并
+    # 遮挡区域是从风机位置向外延伸的扇形子区域
+    
+    # 简化的遮挡模型：为每个风机创建一个小的扇形遮挡区域
+    for turbine in turbine_points:
+        # 风机的方位角
+        turbine_bearing = turbine['bearing']
+        turbine_distance = turbine['distance']
+        
+        # 计算遮挡扇区的左右边界（基于波束宽度的一小部分）
+        # 遮挡扇区的宽度与风机距离成反比（距离越远，遮挡角度越小）
+        shadow_width = min(5.0, beam_width * 0.3)  # 最大5度的遮挡扇区
+        
+        left_bearing = (turbine_bearing - shadow_width / 2) % 360.0
+        right_bearing = (turbine_bearing + shadow_width / 2) % 360.0
+        
+        # 添加风机位置作为遮挡区域的起点
+        blocked_polygon.append([turbine['lon'], turbine['lat']])
+        
+        # 沿着遮挡扇区的左边界向外延伸到最大距离
+        step = max(1.0, shadow_width / 10.0)
+        
+        if right_bearing >= left_bearing:
+            # 不跨越0度
+            bearing = left_bearing
+            while bearing <= right_bearing:
+                dest_lat, dest_lon = calculate_destination(
+                    radar.latitude, radar.longitude, bearing, max_range_m
+                )
+                blocked_polygon.append([dest_lon, dest_lat])
+                bearing += step
+        else:
+            # 跨越0度
+            bearing = left_bearing
+            while bearing <= 360.0:
+                dest_lat, dest_lon = calculate_destination(
+                    radar.latitude, radar.longitude, bearing, max_range_m
+                )
+                blocked_polygon.append([dest_lon, dest_lat])
+                bearing += step
+            
+            bearing = 0.0
+            while bearing <= right_bearing:
+                dest_lat, dest_lon = calculate_destination(
+                    radar.latitude, radar.longitude, bearing, max_range_m
+                )
+                blocked_polygon.append([dest_lon, dest_lat])
+                bearing += step
+    
+    # 闭合多边形（回到第一个风机位置）
+    if blocked_polygon:
+        blocked_polygon.append(blocked_polygon[0])
+    
+    return blocked_polygon
+
+
 def render_map():
     """渲染地图视图"""
     st.subheader("🗺️ 场景地图")
@@ -503,25 +608,6 @@ def render_map():
         st.session_state.show_coverage = True
     show_coverage = st.checkbox("显示雷达覆盖范围", value=st.session_state.show_coverage, key="show_coverage_checkbox")
     st.session_state.show_coverage = show_coverage
-    
-    # 影响区域显示控制
-    if 'show_impact' not in st.session_state:
-        st.session_state.show_impact = True
-    show_impact = st.checkbox("显示风机影响区域", value=st.session_state.show_impact, key="show_impact_checkbox")
-    st.session_state.show_impact = show_impact
-    
-    # 影响阈值控制
-    if 'impact_threshold' not in st.session_state:
-        st.session_state.impact_threshold = 0.3
-    impact_threshold = st.slider(
-        "影响阈值 (仅显示影响因子高于此值的区域)",
-        min_value=0.0,
-        max_value=1.0,
-        value=st.session_state.impact_threshold,
-        step=0.05,
-        key="impact_threshold_slider"
-    )
-    st.session_state.impact_threshold = impact_threshold
     
     radar = st.session_state.scene.radar
     turbines = st.session_state.scene.turbines
@@ -591,7 +677,8 @@ def render_map():
             beam_center = radar.beam_direction_deg
             beam_width = radar.beamwidth_deg
             
-            polygon_points = []
+            # 计算整个扇形区域（绿色可见区域）
+            full_sector_points = []
             
             # 如果波束宽度大于等于360度，显示完整圆形
             if beam_width >= 360.0:
@@ -599,20 +686,20 @@ def render_map():
                     dest_lat, dest_lon = calculate_destination(
                         radar.latitude, radar.longitude, bearing, max_range_m
                     )
-                    polygon_points.append([dest_lon, dest_lat])
+                    full_sector_points.append([dest_lon, dest_lat])
             else:
                 # 计算左右边界方位角（归一化到0-360度）
                 left_bearing = (beam_center - beam_width / 2) % 360.0
                 right_bearing = (beam_center + beam_width / 2) % 360.0
                 
                 # 添加雷达中心点作为顶点
-                polygon_points.append([radar.longitude, radar.latitude])
+                full_sector_points.append([radar.longitude, radar.latitude])
                 
                 # 添加左侧边界点
                 dest_lat, dest_lon = calculate_destination(
                     radar.latitude, radar.longitude, left_bearing, max_range_m
                 )
-                polygon_points.append([dest_lon, dest_lat])
+                full_sector_points.append([dest_lon, dest_lat])
                 
                 # 添加弧线上的点（从左侧到右侧）
                 # 计算步长，确保至少2个点，最多36个点
@@ -625,14 +712,14 @@ def render_map():
                         dest_lat, dest_lon = calculate_destination(
                             radar.latitude, radar.longitude, bearing, max_range_m
                         )
-                        polygon_points.append([dest_lon, dest_lat])
+                        full_sector_points.append([dest_lon, dest_lat])
                         bearing += step
                     # 确保最后一个点正好是右边界
-                    if polygon_points[-1] != [dest_lon, dest_lat]:
+                    if full_sector_points[-1] != [dest_lon, dest_lat]:
                         dest_lat, dest_lon = calculate_destination(
                             radar.latitude, radar.longitude, right_bearing, max_range_m
                         )
-                        polygon_points.append([dest_lon, dest_lat])
+                        full_sector_points.append([dest_lon, dest_lat])
                 else:
                     # 跨越0度，从左边界到360度，再从0度到右边界
                     bearing = left_bearing
@@ -640,7 +727,7 @@ def render_map():
                         dest_lat, dest_lon = calculate_destination(
                             radar.latitude, radar.longitude, bearing, max_range_m
                         )
-                        polygon_points.append([dest_lon, dest_lat])
+                        full_sector_points.append([dest_lon, dest_lat])
                         bearing += step
                     # 从0度开始
                     bearing = 0.0
@@ -648,72 +735,60 @@ def render_map():
                         dest_lat, dest_lon = calculate_destination(
                             radar.latitude, radar.longitude, bearing, max_range_m
                         )
-                        polygon_points.append([dest_lon, dest_lat])
+                        full_sector_points.append([dest_lon, dest_lat])
                         bearing += step
                     # 确保最后一个点正好是右边界
-                    if polygon_points[-1] != [dest_lon, dest_lat]:
+                    if full_sector_points[-1] != [dest_lon, dest_lat]:
                         dest_lat, dest_lon = calculate_destination(
                             radar.latitude, radar.longitude, right_bearing, max_range_m
                         )
-                        polygon_points.append([dest_lon, dest_lat])
+                        full_sector_points.append([dest_lon, dest_lat])
                 
                 # 闭合多边形（回到雷达中心点）
-                polygon_points.append([radar.longitude, radar.latitude])
+                full_sector_points.append([radar.longitude, radar.latitude])
             
-            # 创建多边形数据
-            polygon_data = [{
-                'polygon': polygon_points,
-                'color': [255, 0, 0, 80]  # 半透明红色 (RGBA)
+            # 创建整个扇形区域的绿色图层（可见区域）
+            full_sector_data = [{
+                'polygon': full_sector_points,
+                'color': [0, 255, 0, 100]  # 半透明绿色 (RGBA)
             }]
             
-            coverage_layer = pydeck.Layer(
+            full_sector_layer = pydeck.Layer(
                 'PolygonLayer',
-                data=polygon_data,
+                data=full_sector_data,
                 get_polygon='polygon',
                 get_fill_color='color',
-                get_line_color=[255, 0, 0],
-                get_line_width=6,
+                get_line_color=[0, 255, 0],
+                get_line_width=2,
                 filled=True,
                 stroked=True,
                 pickable=False,
-                opacity=0.5
+                opacity=0.6
             )
-            coverage_layers.append(coverage_layer)
-        
-        # 添加风机影响区域图层
-        impact_layers = []
-        if st.session_state.show_impact and turbines:
-            # 计算影响区域
-            impact_zones = calculate_turbine_impact_zones(radar, turbines, radar.max_range_km)
+            coverage_layers.append(full_sector_layer)
             
-            # 根据阈值过滤影响区域
-            filtered_zones = [zone for zone in impact_zones if zone['impact_factor'] >= st.session_state.impact_threshold]
-            
-            for zone in filtered_zones:
-                impact_layer = pydeck.Layer(
-                    'PolygonLayer',
-                    data=[zone],  # 每个风机单独一个图层
-                    get_polygon='polygon',
-                    get_fill_color='color',
-                    get_line_color=[255, 100, 0],
-                    get_line_width=3,
-                    filled=True,
-                    stroked=True,
-                    pickable=True,
-                    opacity=0.7,
-                    auto_highlight=True
-                )
-                impact_layers.append(impact_layer)
-            
-            # 显示颜色图例
-            if filtered_zones:
-                st.markdown("""
-                **颜色图例**（影响强度）：
-                - 🔴 红色越深：影响因子越高（接近1.0）
-                - 🟠 橙色：中等影响（0.5-0.7）
-                - 🟡 黄色：较弱影响（0.3-0.5）
-                - 🟢 绿色：轻微影响（低于0.3）
-                """)
+            # 计算合并的遮挡区域（红色区域）
+            if turbines:
+                blocked_polygon = calculate_combined_blocked_polygon(radar, turbines, radar.max_range_km)
+                if blocked_polygon:
+                    blocked_data = [{
+                        'polygon': blocked_polygon,
+                        'color': [255, 0, 0, 150]  # 半透明红色 (RGBA)
+                    }]
+                    
+                    blocked_layer = pydeck.Layer(
+                        'PolygonLayer',
+                        data=blocked_data,
+                        get_polygon='polygon',
+                        get_fill_color='color',
+                        get_line_color=[255, 0, 0],
+                        get_line_width=1,
+                        filled=True,
+                        stroked=False,
+                        pickable=True,
+                        opacity=0.8
+                    )
+                    coverage_layers.append(blocked_layer)
         
         # 设置视图状态（以雷达位置为中心）
         zoom_level = 10 if not turbines else 9  # 有风机时缩小一些
@@ -726,14 +801,14 @@ def render_map():
         )
         
         # 创建地图（合并图标图层和覆盖范围图层），确保点图层在最上层
-        all_layers = coverage_layers + impact_layers + [icon_layer]
+        all_layers = coverage_layers + [icon_layer]
         r = pydeck.Deck(
             layers=all_layers,
             initial_view_state=view_state,
             map_style='mapbox://styles/mapbox/streets-zh-v1',
             api_keys={"mapbox": MAPBOX_API_KEY},
             tooltip={
-                'html': '<b>{name}</b><br/>{type}<br/><small>影响因子: {impact_factor} | 距离: {distance_km} km</small>',
+                'html': '<b>{name}</b><br/>{type}',
                 'style': {
                     'backgroundColor': 'steelblue',
                     'color': 'white'
@@ -743,6 +818,14 @@ def render_map():
         
         # 渲染地图
         st.pydeck_chart(r, use_container_width=True)
+        
+        # 显示颜色图例
+        if radar.max_range_km > 0 and st.session_state.show_coverage:
+            st.markdown("""
+            **颜色图例**：
+            - 🟢 绿色区域：雷达可见区域（无遮挡）
+            - 🔴 红色区域：被风机遮挡区域（不可见）
+            """)
     else:
         st.info("暂无数据，请先配置雷达和风机")
     
