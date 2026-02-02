@@ -650,14 +650,16 @@ def render_map():
             'icon': get_icon_data('windmill')
         })
     
-    # 添加目标
+    # 添加目标（转换航向角为PyDeck旋转角度）
+    # heading是正北顺时针，pydeck的angle是东逆时针，转换：angle = 90 - heading
+    target_angle = (90 - target.heading_deg) % 360
     map_data.append({
         'lat': target.latitude,
         'lon': target.longitude,
         'name': f"目标 ({target.target_type})",
-        'type': f"目标 - RCS: {target.rcs_dbsm} dBm² | 高度: {target.altitude_m}m",
+        'type': f"目标 - RCS: {target.rcs_dbsm} dBm² | 高度: {target.altitude_m}m | 航向: {target.heading_deg:.1f}°",
         'size': 15,
-        'angle': target.heading_deg,
+        'angle': target_angle,
         'color': [0, 150, 255],
         'icon': get_icon_data('airport')
     })
@@ -1555,6 +1557,9 @@ def render_circular_motion_sim():
             st.session_state.circular_sim_running = False
             st.info("🔄 仿真已重置")
     
+    # 等值线图显示控制
+    show_contour = st.checkbox("🔥 显示探测性能等值线图层", value=True, key="show_contour_checkbox")
+    
     # 实时仿真显示
     if st.session_state.circular_sim_running and st.session_state.circular_sim:
         # 创建占位符用于实时更新
@@ -1573,9 +1578,14 @@ def render_circular_motion_sim():
             # 获取当前位置
             inner_pos, outer_pos = sim.get_current_positions()
             
-            # 渲染地图
+            # 渲染地图（传入等值线参数）
             with map_placeholder.container():
-                render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon)
+                render_circular_motion_map(
+                    sim, inner_pos, outer_pos, center_lat, center_lon,
+                    show_detection_contour=show_contour,
+                    altitude_m=altitude_m,
+                    rcs_dbsm=rcs_dbsm
+                )
             
             # 渲染指标
             with metrics_placeholder.container():
@@ -1585,11 +1595,257 @@ def render_circular_motion_sim():
             time.sleep(0.5)
             st.experimental_rerun()
     else:
-        # 显示静态说明
-        st.info("👆 点击'开始仿真'按钮启动圆周运动仿真")
+        # 未运行仿真时，显示静态地图（只显示等值线）
+        if show_contour:
+            sim = CircularMotionSimulator(
+                config=CircularMotionConfig(center_lat=center_lat, center_lon=center_lon),
+                radar=radar,
+                turbines=turbines
+            )
+            render_circular_motion_map(
+                sim, None, None, center_lat, center_lon,
+                show_detection_contour=True,
+                altitude_m=altitude_m,
+                rcs_dbsm=rcs_dbsm
+            )
+        else:
+            st.info("👆 点击'开始仿真'按钮启动圆周运动仿真，或勾选上方'显示探测性能等值线图层'查看覆盖范围")
 
 
-def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon):
+def calculate_detection_probability_at_point(radar, turbines, lat, lon, altitude_m, rcs_dbsm):
+    """
+    计算指定位置的探测概率
+    
+    Args:
+        radar: 雷达配置
+        turbines: 风机列表
+        lat, lon: 目标位置
+        altitude_m: 目标高度
+        rcs_dbsm: 目标RCS
+        
+    Returns:
+        detection_probability: 探测概率 (0-1)
+        snr_db: 信噪比 (dB)
+        is_blocked: 是否被遮挡
+    """
+    from models.target import TargetConfig
+    from engine.circular_motion_sim import TargetState, CircularMotionSimulator
+    
+    # 计算距离和方位
+    distance_m = calculate_distance(radar.latitude, radar.longitude, lat, lon)
+    bearing = calculate_bearing(radar.latitude, radar.longitude, lat, lon)
+    
+    # 检查是否在雷达最大探测范围内
+    max_range_m = radar.max_range_km * 1000
+    if distance_m > max_range_m:
+        return 0.0, -999.0, False
+    
+    # 检查是否在波束范围内
+    beam_center = radar.beam_direction_deg
+    beam_width = radar.beamwidth_deg
+    angle_diff = abs(bearing - beam_center)
+    angle_diff = min(angle_diff, 360 - angle_diff)
+    
+    if angle_diff > beam_width / 2:
+        return 0.0, -999.0, False
+    
+    # 检查是否被风机遮挡
+    is_blocked = False
+    for turbine in turbines:
+        # 简化的遮挡检测：如果目标在风机后方且角度接近
+        turbine_bearing = calculate_bearing(radar.latitude, radar.longitude, 
+                                           turbine.latitude, turbine.longitude)
+        turbine_distance = calculate_distance(radar.latitude, radar.longitude,
+                                             turbine.latitude, turbine.longitude)
+        
+        # 如果风机在雷达和目标之间
+        angle_diff_to_turbine = abs(bearing - turbine_bearing)
+        angle_diff_to_turbine = min(angle_diff_to_turbine, 360 - angle_diff_to_turbine)
+        
+        if angle_diff_to_turbine < 2.0 and distance_m > turbine_distance:
+            is_blocked = True
+            break
+    
+    # 计算SNR（简化雷达方程）
+    wavelength = radar.get_wavelength()
+    snr_base = (radar.power_kw * 1000 * 
+                (10 ** (radar.antenna_gain_dbi / 10)) ** 2 * 
+                wavelength ** 2 * 
+                (10 ** (rcs_dbsm / 10))) / (distance_m ** 4)
+    
+    snr_db = 10 * np.log10(snr_base) + 100
+    
+    if is_blocked:
+        snr_db -= 20.0
+    
+    # 波束方向图影响
+    beam_factor = np.exp(-2.776 * (angle_diff / (beam_width / 2)) ** 2)
+    snr_db += 10 * np.log10(beam_factor)
+    
+    # 计算探测概率
+    if snr_db > 20:
+        detection_probability = 0.99
+    elif snr_db > 13:
+        detection_probability = 0.9 + (snr_db - 13) / 70
+    elif snr_db > 0:
+        detection_probability = 0.5 + snr_db / 26
+    elif snr_db > -10:
+        detection_probability = max(0, 0.1 + snr_db / 100)
+    else:
+        detection_probability = 0.0
+    
+    return detection_probability, snr_db, is_blocked
+    
+    # 生成网格数据
+    with st.spinner("正在计算探测性能分布..."):
+        grid_data = generate_detection_contour_data(
+            radar, turbines, center_lat, center_lon,
+            radius_km=radar.max_range_km * 0.8,  # 使用雷达最大探测距离的80%
+            grid_size=60,
+            altitude_m=altitude_m,
+            rcs_dbsm=rcs_dbsm
+        )
+    
+    # 选择显示指标
+    metric_option = st.radio(
+        "选择显示指标",
+        ["探测概率", "信噪比 (SNR)"],
+        horizontal=True,
+        key="contour_metric"
+    )
+    
+    if metric_option == "探测概率":
+        z_data = grid_data['detection_probs']
+        colorscale = [
+            [0, 'rgba(0,0,100,0.3)'],      # 深蓝 - 无探测
+            [0.2, 'rgba(0,100,255,0.4)'],  # 蓝
+            [0.4, 'rgba(0,255,255,0.5)'],  # 青
+            [0.6, 'rgba(0,255,0,0.5)'],    # 绿
+            [0.8, 'rgba(255,255,0,0.6)'],  # 黄
+            [1, 'rgba(255,0,0,0.7)']       # 红 - 高探测概率
+        ]
+        zmin, zmax = 0, 1
+        colorbar_title = "探测概率"
+    else:
+        z_data = grid_data['snr_values']
+        colorscale = "Viridis"
+        zmin, zmax = -30, 40
+        colorbar_title = "SNR (dB)"
+    
+    # 创建等值线图
+    fig = go.Figure()
+    
+    # 添加等值线
+    fig.add_trace(go.Contour(
+        z=z_data,
+        x=grid_data['lons'],
+        y=grid_data['lats'],
+        colorscale=colorscale,
+        contours=dict(
+            start=zmin,
+            end=zmax,
+            size=(zmax - zmin) / 10,
+            showlabels=True,
+            labelfont=dict(size=10, color='white')
+        ),
+        colorbar=dict(
+            title=colorbar_title,
+            # titleside='right',
+            thickness=20,
+            len=0.8
+        ),
+        opacity=0.7,
+        name='探测性能'
+    ))
+    
+    # 添加雷达位置
+    fig.add_trace(go.Scatter(
+        x=[radar.longitude],
+        y=[radar.latitude],
+        mode='markers+text',
+        marker=dict(size=15, color='red', symbol='x'),
+        text=['雷达'],
+        textposition='top center',
+        name='雷达'
+    ))
+    
+    # 添加风机位置
+    if turbines:
+        turbine_lons = [t.longitude for t in turbines]
+        turbine_lats = [t.latitude for t in turbines]
+        fig.add_trace(go.Scatter(
+            x=turbine_lons,
+            y=turbine_lats,
+            mode='markers+text',
+            marker=dict(size=10, color='white', symbol='diamond', 
+                       line=dict(color='black', width=1)),
+            text=[t.name for t in turbines],
+            textposition='bottom center',
+            name='风机'
+        ))
+    
+    # 设置布局
+    fig.update_layout(
+        title=f"{metric_option}分布 (高度: {altitude_m}m, RCS: {rcs_dbsm}dBm²)",
+        xaxis_title="经度",
+        yaxis_title="纬度",
+        height=600,
+        showlegend=True,
+        yaxis=dict(scaleanchor="x", scaleratio=1),  # 保持比例
+        plot_bgcolor='rgba(240,240,240,0.5)'
+    )
+    
+
+def generate_detection_grid_for_pydeck(radar, turbines, center_lat, center_lon,
+                                        radius_km=10, grid_size=40, altitude_m=1000, rcs_dbsm=10):
+    """
+    生成探测性能网格数据用于PyDeck可视化
+    
+    Returns:
+        grid_points: 网格点列表，每个点包含位置和探测概率
+    """
+    # 创建网格
+    lat_range = radius_km / 111.0
+    lon_range = radius_km / (111.0 * np.cos(np.radians(center_lat)))
+    
+    lats = np.linspace(center_lat - lat_range, center_lat + lat_range, grid_size)
+    lons = np.linspace(center_lon - lon_range, center_lon + lon_range, grid_size)
+    
+    grid_points = []
+    
+    for lat in lats:
+        for lon in lons:
+            prob, snr, is_blocked = calculate_detection_probability_at_point(
+                radar, turbines, lat, lon, altitude_m, rcs_dbsm
+            )
+            
+            # 根据探测概率设置颜色
+            if prob > 0.8:
+                color = [0, 255, 0, 120]      # 绿色 - 高探测概率
+            elif prob > 0.5:
+                color = [255, 255, 0, 100]    # 黄色 - 中等
+            elif prob > 0.2:
+                color = [255, 165, 0, 80]     # 橙色 - 较低
+            elif prob > 0:
+                color = [255, 0, 0, 60]       # 红色 - 低
+            else:
+                color = [100, 100, 100, 40]   # 灰色 - 无探测
+            
+            grid_points.append({
+                'lat': lat,
+                'lon': lon,
+                'detection_prob': prob,
+                'snr_db': snr if snr > -900 else -50,
+                'is_blocked': is_blocked,
+                'color': color,
+                'elevation': prob * 500  # 高度代表探测概率
+            })
+    
+    return grid_points
+
+
+def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon, 
+                                show_detection_contour=True, altitude_m=1000, rcs_dbsm=10):
     """渲染圆周运动地图"""
     st.subheader("📍 实时位置追踪")
     
@@ -1640,7 +1896,7 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
     if inner_pos:
         # 计算飞机图标旋转角度（heading是正北顺时针，pydeck的angle是东逆时针，需要转换）
         # pydeck的0度指向东（右侧），需要转换：angle = 90 - heading
-        inner_angle = (0 - inner_pos['heading']) % 360
+        inner_angle = (90 - inner_pos['heading']) % 360
         map_data.append({
             'lat': inner_pos['lat'],
             'lon': inner_pos['lon'],
@@ -1654,7 +1910,7 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
     
     if outer_pos:
         # 计算飞机图标旋转角度
-        outer_angle = (0 - outer_pos['heading']) % 360
+        outer_angle = (90 - outer_pos['heading']) % 360
         map_data.append({
             'lat': outer_pos['lat'],
             'lon': outer_pos['lon'],
@@ -1671,24 +1927,59 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
     # Mapbox API密钥
     MAPBOX_API_KEY = "***REMOVED***"
     
-    # 创建图层
-    icon_layer = pydeck.Layer(
-        'IconLayer',
-        data=df,
-        get_icon='icon',
-        get_size='size',
-        get_color="color",
-        get_angle='angle',  # 添加旋转角度
-        size_scale=2,
-        get_position=['lon', 'lat'],
-        pickable=True,
-        opacity=1.0
-    )
+    # 创建基础图层列表
+    layers = []
+    
+    # 添加探测性能等值线图层（使用ColumnLayer显示为3D柱状图）
+    if show_detection_contour:
+        grid_data = generate_detection_grid_for_pydeck(
+            radar, turbines, center_lat, center_lon,
+            radius_km=radar.max_range_km * 0.6,  # 使用雷达最大探测距离的60%
+            grid_size=35,
+            altitude_m=altitude_m,
+            rcs_dbsm=rcs_dbsm
+        )
+        
+        # 使用ColumnLayer显示探测性能（3D柱状图效果）
+        detection_layer = pydeck.Layer(
+            'ColumnLayer',
+            data=grid_data,
+            get_position=['lon', 'lat'],
+            get_elevation='elevation',
+            elevation_scale=1,
+            get_fill_color='color',
+            get_line_color=[0, 0, 0, 0],
+            radius=300,  # 柱子半径（米）
+            pickable=True,
+            opacity=0.6,
+            auto_highlight=True
+        )
+        layers.append(detection_layer)
+        
+        # 添加文本图层显示探测概率值（可选，只在网格点较少时显示）
+        # 过滤掉探测概率为0的点
+        text_data = [p for p in grid_data if p['detection_prob'] > 0.3]
+        # 只显示部分点以避免拥挤
+        text_data = text_data[::max(1, len(text_data) // 20)]
+        
+        for point in text_data:
+            point['text'] = f"{point['detection_prob']*100:.0f}%"
+        
+        if text_data:
+            text_layer = pydeck.Layer(
+                'TextLayer',
+                data=text_data,
+                get_position=['lon', 'lat'],
+                get_text='text',
+                get_size=12,
+                get_color=[255, 255, 255],
+                get_angle=0,
+                get_text_anchor='middle',
+                get_alignment_baseline='center'
+            )
+            layers.append(text_layer)
     
     # 添加圆周轨迹
-    trajectory_layers = []
-    
-    # 获取轨迹数据
     inner_traj, outer_traj = sim.get_trajectory_data()
     
     # 内圈轨迹
@@ -1706,7 +1997,7 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
             width_min_pixels=2,
             pickable=False
         )
-        trajectory_layers.append(inner_path_layer)
+        layers.append(inner_path_layer)
     
     # 外圈轨迹
     if outer_traj:
@@ -1723,20 +2014,35 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
             width_min_pixels=2,
             pickable=False
         )
-        trajectory_layers.append(outer_path_layer)
+        layers.append(outer_path_layer)
+    
+    # 创建图标图层（放在最上层）
+    icon_layer = pydeck.Layer(
+        'IconLayer',
+        data=df,
+        get_icon='icon',
+        get_size='size',
+        get_color="color",
+        get_angle='angle',
+        size_scale=2,
+        get_position=['lon', 'lat'],
+        pickable=True,
+        opacity=1.0
+    )
+    layers.append(icon_layer)
     
     # 设置视图
     view_state = pydeck.ViewState(
         latitude=center_lat,
         longitude=center_lon,
         zoom=11,
-        pitch=0,
+        pitch=45 if show_detection_contour else 0,  # 如果显示等值线，使用3D视角
         bearing=0
     )
     
     # 创建地图
     r = pydeck.Deck(
-        layers=trajectory_layers + [icon_layer],
+        layers=layers,
         initial_view_state=view_state,
         map_style='mapbox://styles/mapbox/streets-zh-v1',
         api_keys={"mapbox": MAPBOX_API_KEY},
@@ -1750,6 +2056,19 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
     )
     
     st.pydeck_chart(r, use_container_width=True)
+    
+    # 显示图例
+    if show_detection_contour:
+        st.markdown("""
+        **探测性能图例：**
+        - 🟢 绿色柱子：探测概率 > 80%（高）
+        - 🟡 黄色柱子：探测概率 50-80%（中等）
+        - 🟠 橙色柱子：探测概率 20-50%（较低）
+        - 🔴 红色柱子：探测概率 < 20%（低）
+        - ⚫ 灰色柱子：无探测（超出范围或被遮挡）
+        
+        *柱子高度代表探测概率大小*
+        """)
 
 
 def render_circular_motion_metrics(inner_pos, outer_pos, inner_metrics, outer_metrics):
