@@ -336,7 +336,7 @@ def render_target_config():
             target.heading_deg = st.number_input(
                 "航向角 (度)",
                 min_value=0.0, max_value=360.0,
-                value=0.0, step=5.0
+                value=90.0, step=5.0
             )
     
     with st.expander("位置信息"):
@@ -632,6 +632,7 @@ def render_map():
         'name': radar.name,
         'type': '雷达站',
         'size': 20,
+        'angle':0,
         'color': [255, 0, 0],
         'icon': get_icon_data('communications-tower')
     })
@@ -644,6 +645,7 @@ def render_map():
             'name': t.name,
             'type': f'风机 ({t.model})',
             'size': 20,
+            'angle':0,
             'color': [255, 255, 255],
             'icon': get_icon_data('windmill')
         })
@@ -655,6 +657,7 @@ def render_map():
         'name': f"目标 ({target.target_type})",
         'type': f"目标 - RCS: {target.rcs_dbsm} dBm² | 高度: {target.altitude_m}m",
         'size': 15,
+        'angle': target.heading_deg,
         'color': [0, 150, 255],
         'icon': get_icon_data('airport')
     })
@@ -673,6 +676,7 @@ def render_map():
             get_icon='icon',
             get_size='size',
             get_color="color",
+            get_angle="angle",
             size_scale=2,
             get_position=['lon', 'lat'],
             pickable=True,
