@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import pydeck
+import time
+from datetime import datetime
 
 # 设置页面配置
 st.set_page_config(
@@ -23,6 +25,7 @@ from models import RadarConfig, Turbine, TargetConfig, Scene
 from models.turbine import TURBINE_MODELS
 from models.target import TARGET_TYPES
 from engine import EvalEngine
+from engine.circular_motion_sim import CircularMotionSimulator, CircularMotionConfig
 from utils.geo_utils import calculate_distance, calculate_bearing, calculate_destination
 
 # 初始化session state
@@ -48,6 +51,14 @@ if 'pending_lat_offset' not in st.session_state:
     st.session_state.pending_lat_offset = None  # 待处理的纬度偏移更新
 if 'pending_lon_offset' not in st.session_state:
     st.session_state.pending_lon_offset = None  # 待处理的经度偏移更新
+
+# 初始化圆周运动仿真状态
+if 'circular_sim' not in st.session_state:
+    st.session_state.circular_sim = None
+if 'circular_sim_running' not in st.session_state:
+    st.session_state.circular_sim_running = False
+if 'circular_sim_config' not in st.session_state:
+    st.session_state.circular_sim_config = None
 
 # 自定义CSS样式
 st.markdown("""
@@ -1438,41 +1449,415 @@ def get_risk_class(risk_level: str) -> str:
     return risk_map.get(risk_level, "risk-low")
 
 
+def render_circular_motion_sim():
+    """渲染圆周运动仿真页面"""
+    st.markdown("---")
+    st.header("🔄 风电场目标圆周运动仿真")
+    st.markdown("目标以风电场中心为圆心，在1km和5km半径的圆周上运动，实时显示雷达探测性能变化")
+    
+    radar = st.session_state.scene.radar
+    turbines = st.session_state.scene.turbines
+    
+    if not turbines:
+        st.warning("⚠️ 请先添加至少一台风机作为风电场中心参考")
+        return
+    
+    # 计算风电场中心（所有风机的平均位置）
+    center_lat = np.mean([t.latitude for t in turbines])
+    center_lon = np.mean([t.longitude for t in turbines])
+    
+    # 仿真配置
+    with st.expander("⚙️ 仿真配置", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            velocity_ms = st.number_input(
+                "目标速度 (m/s)",
+                min_value=10.0, max_value=500.0,
+                value=100.0, step=10.0
+            )
+            altitude_m = st.number_input(
+                "飞行高度 (m)",
+                min_value=100.0, max_value=20000.0,
+                value=1000.0, step=100.0
+            )
+        
+        with col2:
+            rcs_dbsm = st.number_input(
+                "目标RCS (dBm²)",
+                min_value=-30.0, max_value=50.0,
+                value=10.0, step=1.0
+            )
+            target_type = st.selectbox(
+                "目标类型",
+                list(TARGET_TYPES.keys()),
+                index=0
+            )
+        
+        with col3:
+            radius_inner = st.number_input(
+                "内圈半径 (km)",
+                min_value=0.5, max_value=10.0,
+                value=1.0, step=0.5
+            )
+            radius_outer = st.number_input(
+                "外圈半径 (km)",
+                min_value=1.0, max_value=20.0,
+                value=5.0, step=0.5
+            )
+    
+    # 显示风电场中心位置
+    st.info(f"📍 风电场中心: 纬度 {center_lat:.6f}, 经度 {center_lon:.6f}")
+    
+    # 控制按钮
+    col1, col2, col3 = st.columns([1, 1, 2])
+    
+    with col1:
+        if st.button("▶️ 开始仿真", type="primary", use_container_width=True):
+            # 创建仿真配置
+            config = CircularMotionConfig(
+                center_lat=center_lat,
+                center_lon=center_lon,
+                radius_inner_km=radius_inner,
+                radius_outer_km=radius_outer,
+                velocity_ms=velocity_ms,
+                altitude_m=altitude_m,
+                rcs_dbsm=rcs_dbsm,
+                target_type=target_type
+            )
+            
+            # 创建仿真器
+            st.session_state.circular_sim = CircularMotionSimulator(
+                config=config,
+                radar=radar,
+                turbines=turbines
+            )
+            st.session_state.circular_sim.start()
+            st.session_state.circular_sim_running = True
+            st.session_state.circular_sim_config = config
+            st.success("✅ 仿真已启动")
+    
+    with col2:
+        if st.button("⏹️ 停止仿真", use_container_width=True):
+            if st.session_state.circular_sim:
+                st.session_state.circular_sim.stop()
+            st.session_state.circular_sim_running = False
+            st.info("⏹️ 仿真已停止")
+    
+    with col3:
+        if st.button("🔄 重置仿真", use_container_width=True):
+            if st.session_state.circular_sim:
+                st.session_state.circular_sim.reset()
+            st.session_state.circular_sim_running = False
+            st.info("🔄 仿真已重置")
+    
+    # 实时仿真显示
+    if st.session_state.circular_sim_running and st.session_state.circular_sim:
+        # 创建占位符用于实时更新
+        map_placeholder = st.empty()
+        metrics_placeholder = st.empty()
+        
+        # 执行一次更新
+        sim = st.session_state.circular_sim
+        inner_state, outer_state = sim.update(500)  # 500ms更新一次
+        
+        if inner_state and outer_state:
+            # 计算探测指标
+            inner_metrics = sim.calculate_detection_metrics(inner_state)
+            outer_metrics = sim.calculate_detection_metrics(outer_state)
+            
+            # 获取当前位置
+            inner_pos, outer_pos = sim.get_current_positions()
+            
+            # 渲染地图
+            with map_placeholder.container():
+                render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon)
+            
+            # 渲染指标
+            with metrics_placeholder.container():
+                render_circular_motion_metrics(inner_pos, outer_pos, inner_metrics, outer_metrics)
+            
+            # 自动刷新
+            time.sleep(0.5)
+            st.experimental_rerun()
+    else:
+        # 显示静态说明
+        st.info("👆 点击'开始仿真'按钮启动圆周运动仿真")
+
+
+def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon):
+    """渲染圆周运动地图"""
+    st.subheader("📍 实时位置追踪")
+    
+    radar = st.session_state.scene.radar
+    turbines = st.session_state.scene.turbines
+    
+    # 创建地图数据
+    map_data = []
+    
+    # 添加雷达
+    map_data.append({
+        'lat': radar.latitude,
+        'lon': radar.longitude,
+        'name': radar.name,
+        'type': '雷达站',
+        'size': 20,
+        'color': [255, 0, 0],
+        'icon': get_icon_data('communications-tower')
+    })
+    
+    # 添加风机
+    for t in turbines:
+        map_data.append({
+            'lat': t.latitude,
+            'lon': t.longitude,
+            'name': t.name,
+            'type': f'风机 ({t.model})',
+            'size': 15,
+            'color': [255, 255, 255],
+            'icon': get_icon_data('windmill')
+        })
+    
+    # 添加风电场中心
+    map_data.append({
+        'lat': center_lat,
+        'lon': center_lon,
+        'name': '风电场中心',
+        'type': '圆心',
+        'size': 15,
+        'color': [128, 128, 128],
+        'icon': get_icon_data('circle')
+    })
+    
+    # 添加目标
+    if inner_pos:
+        map_data.append({
+            'lat': inner_pos['lat'],
+            'lon': inner_pos['lon'],
+            'name': inner_pos['label'],
+            'type': f"内圈目标 | 探测概率: {inner_pos['detection_probability']*100:.1f}% | SNR: {inner_pos['snr_db']:.1f}dB",
+            'size': 18,
+            'color': [0, 255, 255] if not inner_pos['is_blocked'] else [255, 0, 0],
+            'icon': get_icon_data('airport')
+        })
+    
+    if outer_pos:
+        map_data.append({
+            'lat': outer_pos['lat'],
+            'lon': outer_pos['lon'],
+            'name': outer_pos['label'],
+            'type': f"外圈目标 | 探测概率: {outer_pos['detection_probability']*100:.1f}% | SNR: {outer_pos['snr_db']:.1f}dB",
+            'size': 18,
+            'color': [255, 165, 0] if not outer_pos['is_blocked'] else [255, 0, 0],
+            'icon': get_icon_data('airport')
+        })
+    
+    df = pd.DataFrame(map_data)
+    
+    # Mapbox API密钥
+    MAPBOX_API_KEY = "***REMOVED***"
+    
+    # 创建图层
+    icon_layer = pydeck.Layer(
+        'IconLayer',
+        data=df,
+        get_icon='icon',
+        get_size='size',
+        get_color="color",
+        size_scale=2,
+        get_position=['lon', 'lat'],
+        pickable=True,
+        opacity=1.0
+    )
+    
+    # 添加圆周轨迹
+    trajectory_layers = []
+    
+    # 获取轨迹数据
+    inner_traj, outer_traj = sim.get_trajectory_data()
+    
+    # 内圈轨迹
+    if inner_traj:
+        inner_path = [[p['lon'], p['lat']] for p in inner_traj]
+        inner_path_data = [{'path': inner_path, 'color': [0, 255, 255, 150]}]
+        
+        inner_path_layer = pydeck.Layer(
+            'PathLayer',
+            data=inner_path_data,
+            get_path='path',
+            get_color='color',
+            get_width=3,
+            width_scale=1,
+            width_min_pixels=2,
+            pickable=False
+        )
+        trajectory_layers.append(inner_path_layer)
+    
+    # 外圈轨迹
+    if outer_traj:
+        outer_path = [[p['lon'], p['lat']] for p in outer_traj]
+        outer_path_data = [{'path': outer_path, 'color': [255, 165, 0, 150]}]
+        
+        outer_path_layer = pydeck.Layer(
+            'PathLayer',
+            data=outer_path_data,
+            get_path='path',
+            get_color='color',
+            get_width=3,
+            width_scale=1,
+            width_min_pixels=2,
+            pickable=False
+        )
+        trajectory_layers.append(outer_path_layer)
+    
+    # 设置视图
+    view_state = pydeck.ViewState(
+        latitude=center_lat,
+        longitude=center_lon,
+        zoom=11,
+        pitch=0,
+        bearing=0
+    )
+    
+    # 创建地图
+    r = pydeck.Deck(
+        layers=trajectory_layers + [icon_layer],
+        initial_view_state=view_state,
+        map_style='mapbox://styles/mapbox/streets-zh-v1',
+        api_keys={"mapbox": MAPBOX_API_KEY},
+        tooltip={
+            'html': '<b>{name}</b><br/>{type}',
+            'style': {
+                'backgroundColor': 'steelblue',
+                'color': 'white'
+            }
+        }
+    )
+    
+    st.pydeck_chart(r, use_container_width=True)
+
+
+def render_circular_motion_metrics(inner_pos, outer_pos, inner_metrics, outer_metrics):
+    """渲染圆周运动指标"""
+    st.subheader("📊 实时探测指标")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**🔵 内圈目标 (1km)**")
+        if inner_pos:
+            metric_col1, metric_col2, metric_col3 = st.columns(3)
+            
+            with metric_col1:
+                st.metric(
+                    "探测概率",
+                    f"{inner_pos['detection_probability']*100:.1f}%",
+                    delta="被遮挡" if inner_pos['is_blocked'] else "正常",
+                    delta_color="inverse" if inner_pos['is_blocked'] else "normal"
+                )
+            
+            with metric_col2:
+                st.metric(
+                    "信噪比",
+                    f"{inner_pos['snr_db']:.1f} dB"
+                )
+            
+            with metric_col3:
+                st.metric(
+                    "雷达到目标",
+                    f"{inner_pos['distance_to_radar_km']:.2f} km"
+                )
+            
+            if inner_pos['is_blocked'] and inner_pos['blocked_by']:
+                st.warning(f"⚠️ 被以下风机遮挡: {', '.join(inner_pos['blocked_by'])}")
+        else:
+            st.info("等待数据...")
+    
+    with col2:
+        st.markdown("**🟠 外圈目标 (5km)**")
+        if outer_pos:
+            metric_col1, metric_col2, metric_col3 = st.columns(3)
+            
+            with metric_col1:
+                st.metric(
+                    "探测概率",
+                    f"{outer_pos['detection_probability']*100:.1f}%",
+                    delta="被遮挡" if outer_pos['is_blocked'] else "正常",
+                    delta_color="inverse" if outer_pos['is_blocked'] else "normal"
+                )
+            
+            with metric_col2:
+                st.metric(
+                    "信噪比",
+                    f"{outer_pos['snr_db']:.1f} dB"
+                )
+            
+            with metric_col3:
+                st.metric(
+                    "雷达到目标",
+                    f"{outer_pos['distance_to_radar_km']:.2f} km"
+                )
+            
+            if outer_pos['is_blocked'] and outer_pos['blocked_by']:
+                st.warning(f"⚠️ 被以下风机遮挡: {', '.join(outer_pos['blocked_by'])}")
+        else:
+            st.info("等待数据...")
+    
+    # 显示图例
+    st.markdown("""
+    **颜色说明：**
+    - 🔵 青色：内圈目标（1km半径）正常
+    - 🟠 橙色：外圈目标（5km半径）正常
+    - 🔴 红色：目标被风机遮挡
+    """)
+
+
 def main():
     """主函数"""
     render_header()
     
-    # 侧边栏 - 参数配置
-    with st.sidebar:
-        st.image("https://img.icons8.com/color/96/wind-turbine.png", width=80)
+    # 页面选择
+    page = st.sidebar.radio(
+        "选择功能模块",
+        ["📊 干扰评估", "🔄 圆周运动仿真"],
+        index=0
+    )
+    
+    if page == "📊 干扰评估":
+        # 干扰评估页面
+        with st.sidebar:
+            st.image("https://img.icons8.com/color/96/wind-turbine.png", width=80)
+            
+            render_radar_config()
+            st.markdown("---")
+            render_turbine_config()
+            st.markdown("---")
+            render_target_config()
         
-        render_radar_config()
-        st.markdown("---")
-        render_turbine_config()
-        st.markdown("---")
-        render_target_config()
-    
-    # 主区域
-    # col1, col2 = st.columns([1, 1])
-    
-
-    render_map()
-    
-
-    render_turbine_list()
-    # col1, col2 = st.columns([1, 1])
-    
-    # with col1:
-    #     render_map()
-    
-    # with col2:
-    #     render_turbine_list()
-    
-    # 评估按钮
-    render_evaluation_button()
-    
-    # 评估结果
-    render_results()
+        render_map()
+        render_turbine_list()
+        render_evaluation_button()
+        render_results()
+        
+    else:
+        # 圆周运动仿真页面
+        with st.sidebar:
+            st.image("https://img.icons8.com/color/96/wind-turbine.png", width=80)
+            st.markdown("### 🔄 圆周运动仿真")
+            st.markdown("目标以风电场中心为圆心做圆周运动")
+            
+            # 显示当前配置的风机和雷达信息
+            st.markdown("---")
+            st.markdown("**当前场景信息：**")
+            st.markdown(f"- 风机数量: {len(st.session_state.scene.turbines)}")
+            st.markdown(f"- 雷达: {st.session_state.scene.radar.name}")
+            
+            if st.session_state.scene.turbines:
+                center_lat = np.mean([t.latitude for t in st.session_state.scene.turbines])
+                center_lon = np.mean([t.longitude for t in st.session_state.scene.turbines])
+                st.markdown(f"- 风电场中心: ({center_lat:.4f}, {center_lon:.4f})")
+        
+        render_circular_motion_sim()
     
     # 页脚
     st.markdown("---")
