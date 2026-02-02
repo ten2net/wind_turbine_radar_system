@@ -1796,13 +1796,13 @@ def calculate_detection_probability_at_point(radar, turbines, lat, lon, altitude
     )
     
 
-def generate_detection_grid_for_pydeck(radar, turbines, center_lat, center_lon,
-                                        radius_km=10, grid_size=40, altitude_m=1000, rcs_dbsm=10):
+def generate_detection_contour_data(radar, turbines, center_lat, center_lon,
+                                     radius_km=10, grid_size=50, altitude_m=1000, rcs_dbsm=10):
     """
-    生成探测性能网格数据用于PyDeck可视化
+    生成探测性能等值线数据用于PyDeck ContourLayer
     
     Returns:
-        grid_points: 网格点列表，每个点包含位置和探测概率
+        contour_data: 包含网格数据和等值线配置的字典
     """
     # 创建网格
     lat_range = radius_km / 111.0
@@ -1811,37 +1811,33 @@ def generate_detection_grid_for_pydeck(radar, turbines, center_lat, center_lon,
     lats = np.linspace(center_lat - lat_range, center_lat + lat_range, grid_size)
     lons = np.linspace(center_lon - lon_range, center_lon + lon_range, grid_size)
     
-    grid_points = []
+    # 计算每个网格点的探测概率，生成2D数组
+    detection_probs = np.zeros((grid_size, grid_size))
     
-    for lat in lats:
-        for lon in lons:
+    for i, lat in enumerate(lats):
+        for j, lon in enumerate(lons):
             prob, snr, is_blocked = calculate_detection_probability_at_point(
                 radar, turbines, lat, lon, altitude_m, rcs_dbsm
             )
-            
-            # 根据探测概率设置颜色
-            if prob > 0.8:
-                color = [0, 255, 0, 120]      # 绿色 - 高探测概率
-            elif prob > 0.5:
-                color = [255, 255, 0, 100]    # 黄色 - 中等
-            elif prob > 0.2:
-                color = [255, 165, 0, 80]     # 橙色 - 较低
-            elif prob > 0:
-                color = [255, 0, 0, 60]       # 红色 - 低
-            else:
-                color = [100, 100, 100, 40]   # 灰色 - 无探测
-            
-            grid_points.append({
-                'lat': lat,
-                'lon': lon,
-                'detection_prob': prob,
-                'snr_db': snr if snr > -900 else -50,
-                'is_blocked': is_blocked,
-                'color': color,
-                'elevation': prob * 500  # 高度代表探测概率
-            })
+            detection_probs[i, j] = prob
     
-    return grid_points
+    # 将网格数据转换为 ContourLayer 需要的格式
+    # ContourLayer 需要一个包含所有网格点的数组，每个点包含 [lon, lat, value]
+    grid_points = []
+    for i, lat in enumerate(lats):
+        for j, lon in enumerate(lons):
+            grid_points.append([lon, lat, detection_probs[i, j]])
+    
+    return {
+        'grid_points': grid_points,
+        'bounds': [
+            center_lon - lon_range,  # minX
+            center_lat - lat_range,  # minY
+            center_lon + lon_range,  # maxX
+            center_lat + lat_range   # maxY
+        ],
+        'grid_size': [grid_size, grid_size]
+    }
 
 
 def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon, 
@@ -1930,54 +1926,48 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
     # 创建基础图层列表
     layers = []
     
-    # 添加探测性能等值线图层（使用ColumnLayer显示为3D柱状图）
+    # 添加探测性能热力图层（使用HeatmapLayer）
     if show_detection_contour:
-        grid_data = generate_detection_grid_for_pydeck(
+        contour_data = generate_detection_contour_data(
             radar, turbines, center_lat, center_lon,
             radius_km=radar.max_range_km * 0.6,  # 使用雷达最大探测距离的60%
-            grid_size=35,
+            grid_size=100,  # 增加网格密度使热力图更平滑
             altitude_m=altitude_m,
             rcs_dbsm=rcs_dbsm
         )
         
-        # 使用ColumnLayer显示探测性能（3D柱状图效果）
-        detection_layer = pydeck.Layer(
-            'ColumnLayer',
-            data=grid_data,
-            get_position=['lon', 'lat'],
-            get_elevation='elevation',
-            elevation_scale=1,
-            get_fill_color='color',
-            get_line_color=[0, 0, 0, 0],
-            radius=300,  # 柱子半径（米）
-            pickable=True,
-            opacity=0.6,
-            auto_highlight=True
+        # 使用HeatmapLayer显示探测性能热力图
+        # 将数据转换为 {position: [lon, lat], weight: prob} 格式
+        heatmap_data = []
+        for point in contour_data['grid_points']:
+            heatmap_data.append({
+                'position': [point[0], point[1]],  # [lon, lat]
+                'weight': point[2]  # detection probability
+            })
+        
+        heatmap_layer = pydeck.Layer(
+            'HeatmapLayer',
+            data=heatmap_data,
+            id='detection-heatmap',
+            get_position='position',
+            get_weight='weight',
+            # 热力图半径 - 适当大小让点融合成云图效果
+            radius_pixels=100,
+            # 颜色映射：气象雷达风格，从红色(低探测)到绿色(高探测)
+            color_range=[
+                [192, 192, 192, 180],       # 绿色 - 无探测/极低
+                [255, 0, 0, 180],       # 红色 - 低探测
+                [255, 165, 0, 180],     # 橙色 - 较低
+                [255, 255, 0, 180],     # 黄色 - 中等
+                [173, 255, 47, 180],    # 黄绿 - 较高
+                [0, 255, 0, 200],       # 绿色 - 高探测
+            ],
+            # 强度 - 降低使颜色过渡更平滑
+            intensity=0.3,
+            threshold=0.05,
+            opacity=0.6
         )
-        layers.append(detection_layer)
-        
-        # 添加文本图层显示探测概率值（可选，只在网格点较少时显示）
-        # 过滤掉探测概率为0的点
-        text_data = [p for p in grid_data if p['detection_prob'] > 0.3]
-        # 只显示部分点以避免拥挤
-        text_data = text_data[::max(1, len(text_data) // 20)]
-        
-        for point in text_data:
-            point['text'] = f"{point['detection_prob']*100:.0f}%"
-        
-        if text_data:
-            text_layer = pydeck.Layer(
-                'TextLayer',
-                data=text_data,
-                get_position=['lon', 'lat'],
-                get_text='text',
-                get_size=12,
-                get_color=[255, 255, 255],
-                get_angle=0,
-                get_text_anchor='middle',
-                get_alignment_baseline='center'
-            )
-            layers.append(text_layer)
+        layers.append(heatmap_layer)
     
     # 添加圆周轨迹
     inner_traj, outer_traj = sim.get_trajectory_data()
@@ -2036,7 +2026,7 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
         latitude=center_lat,
         longitude=center_lon,
         zoom=11,
-        pitch=45 if show_detection_contour else 0,  # 如果显示等值线，使用3D视角
+        pitch=0,  # 2D俯视视角
         bearing=0
     )
     
@@ -2060,14 +2050,14 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
     # 显示图例
     if show_detection_contour:
         st.markdown("""
-        **探测性能图例：**
-        - 🟢 绿色柱子：探测概率 > 80%（高）
-        - 🟡 黄色柱子：探测概率 50-80%（中等）
-        - 🟠 橙色柱子：探测概率 20-50%（较低）
-        - 🔴 红色柱子：探测概率 < 20%（低）
-        - ⚫ 灰色柱子：无探测（超出范围或被遮挡）
+        **探测性能热力图图例（气象雷达风格）：**
+        - 🟢 **绿色**：探测概率 80-100%（高探测性能）
+        - 🟡 **黄绿色**：探测概率 60-80%（较高探测性能）
+        - **黄色**：探测概率 40-60%（中等探测性能）
+        - 🟠 **橙色**：探测概率 20-40%（较低探测性能）
+        - 🔴 **红色/深红**：探测概率 < 20%（无有效探测）
         
-        *柱子高度代表探测概率大小*
+        *热力图以平滑渐变形式展示雷达探测性能分布，颜色从红色（低探测）过渡到绿色（高探测），类似气象雷达回波图，受雷达覆盖范围、波束方向和风机遮挡影响*
         """)
 
 
