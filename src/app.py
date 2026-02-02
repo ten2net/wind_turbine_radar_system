@@ -1606,6 +1606,7 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
         'name': radar.name,
         'type': '雷达站',
         'size': 20,
+        'angle': 0,
         'color': [255, 0, 0],
         'icon': get_icon_data('communications-tower')
     })
@@ -1618,6 +1619,7 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
             'name': t.name,
             'type': f'风机 ({t.model})',
             'size': 15,
+            'angle': 0,
             'color': [255, 255, 255],
             'icon': get_icon_data('windmill')
         })
@@ -1629,29 +1631,37 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
         'name': '风电场中心',
         'type': '圆心',
         'size': 15,
+        'angle': 0,
         'color': [128, 128, 128],
         'icon': get_icon_data('circle')
     })
     
-    # 添加目标
+    # 添加目标（带旋转角度）
     if inner_pos:
+        # 计算飞机图标旋转角度（heading是正北顺时针，pydeck的angle是东逆时针，需要转换）
+        # pydeck的0度指向东（右侧），需要转换：angle = 90 - heading
+        inner_angle = (0 - inner_pos['heading']) % 360
         map_data.append({
             'lat': inner_pos['lat'],
             'lon': inner_pos['lon'],
             'name': inner_pos['label'],
-            'type': f"内圈目标 | 探测概率: {inner_pos['detection_probability']*100:.1f}% | SNR: {inner_pos['snr_db']:.1f}dB",
+            'type': f"内圈目标 | 探测概率: {inner_pos['detection_probability']*100:.1f}% | SNR: {inner_pos['snr_db']:.1f}dB | 航向: {inner_pos['heading']:.1f}°",
             'size': 18,
+            'angle': inner_angle,
             'color': [0, 255, 255] if not inner_pos['is_blocked'] else [255, 0, 0],
             'icon': get_icon_data('airport')
         })
     
     if outer_pos:
+        # 计算飞机图标旋转角度
+        outer_angle = (0 - outer_pos['heading']) % 360
         map_data.append({
             'lat': outer_pos['lat'],
             'lon': outer_pos['lon'],
             'name': outer_pos['label'],
-            'type': f"外圈目标 | 探测概率: {outer_pos['detection_probability']*100:.1f}% | SNR: {outer_pos['snr_db']:.1f}dB",
+            'type': f"外圈目标 | 探测概率: {outer_pos['detection_probability']*100:.1f}% | SNR: {outer_pos['snr_db']:.1f}dB | 航向: {outer_pos['heading']:.1f}°",
             'size': 18,
+            'angle': outer_angle,
             'color': [255, 165, 0] if not outer_pos['is_blocked'] else [255, 0, 0],
             'icon': get_icon_data('airport')
         })
@@ -1668,6 +1678,7 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
         get_icon='icon',
         get_size='size',
         get_color="color",
+        get_angle='angle',  # 添加旋转角度
         size_scale=2,
         get_position=['lon', 'lat'],
         pickable=True,
