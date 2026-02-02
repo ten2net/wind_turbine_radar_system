@@ -773,7 +773,7 @@ def render_map():
                 if blocked_polygon:
                     blocked_data = [{
                         'polygon': blocked_polygon,
-                        'color': [255, 0, 0, 150]  # 半透明红色 (RGBA)
+                        'color': [255, 100, 100, 120]  # 统一浅红色 (RGBA)
                     }]
                     
                     blocked_layer = pydeck.Layer(
@@ -781,12 +781,12 @@ def render_map():
                         data=blocked_data,
                         get_polygon='polygon',
                         get_fill_color='color',
-                        get_line_color=[255, 0, 0],
+                        get_line_color=[255, 100, 100],
                         get_line_width=1,
                         filled=True,
                         stroked=False,
                         pickable=True,
-                        opacity=0.8
+                        opacity=0.6
                     )
                     coverage_layers.append(blocked_layer)
         
