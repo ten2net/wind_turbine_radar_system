@@ -173,21 +173,205 @@ def render_radar_config():
     st.info(f"📊 雷达波段: **{band}** | 波长: **{radar.get_wavelength()*100:.2f} cm**")
 
 
-def render_turbine_config():
-    """渲染风机参数配置"""
-    # 处理pending偏移量更新（必须在滑块渲染之前）
-    if st.session_state.pending_lat_offset is not None and st.session_state.pending_lon_offset is not None:
-        st.session_state.lat_offset_slider = st.session_state.pending_lat_offset
-        st.session_state.lon_offset_slider = st.session_state.pending_lon_offset
-        # 清除pending值
-        st.session_state.pending_lat_offset = None
-        st.session_state.pending_lon_offset = None
+def parse_turbine_csv(csv_file):
+    """
+    解析风机CSV文件
     
-    st.subheader("🌪️ 风机参数配置")
+    CSV格式要求：
+    - 必须列：name, latitude, longitude
+    - 可选列：tower_height_m, blade_length_m, rotation_speed_rpm, rcs_dbsm, blade_count, tower_diameter_m, model
     
+    Returns:
+        list: 风机配置字典列表
+    """
+    try:
+        df = pd.read_csv(csv_file)
+        
+        # 检查必需列
+        required_cols = ['name', 'latitude', 'longitude']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            return None, f"CSV文件缺少必需列: {', '.join(missing_cols)}"
+        
+        turbines = []
+        for idx, row in df.iterrows():
+            # 获取型号，默认为第一个可用型号
+            model = row.get('model', list(TURBINE_MODELS.keys())[0])
+            if model not in TURBINE_MODELS:
+                model = list(TURBINE_MODELS.keys())[0]
+            defaults = TURBINE_MODELS[model]
+            
+            turbine = {
+                'name': str(row['name']),
+                'latitude': float(row['latitude']),
+                'longitude': float(row['longitude']),
+                'model': model,
+                'tower_height_m': float(row.get('tower_height_m', defaults['tower_height_m'])),
+                'blade_length_m': float(row.get('blade_length_m', defaults['blade_length_m'])),
+                'rotation_speed_rpm': float(row.get('rotation_speed_rpm', defaults['rotation_speed_rpm'])),
+                'rcs_dbsm': float(row.get('rcs_dbsm', defaults['rcs_dbsm'])),
+                'blade_count': int(row.get('blade_count', defaults['blade_count'])),
+                'tower_diameter_m': float(row.get('tower_diameter_m', defaults['tower_diameter_m']))
+            }
+            turbines.append(turbine)
+        
+        return turbines, None
+    except Exception as e:
+        return None, f"解析CSV文件失败: {str(e)}"
+
+
+def render_turbine_csv_upload():
+    """渲染风机CSV上传界面"""
+    st.markdown("---")
+    st.subheader("📁 批量上传风机坐标")
+    
+    with st.expander("CSV文件格式说明", expanded=False):
+        st.markdown("""
+        **CSV文件格式要求：**
+        
+        1. **必需列**（必须包含）：
+           - `name`: 风机名称
+           - `latitude`: 纬度（度）
+           - `longitude`: 经度（度）
+        
+        2. **可选列**（如未提供则使用默认值）：
+           - `model`: 风机型号（如V90-2.0MW、SG2.5-130等）
+           - `tower_height_m`: 塔筒高度（米）
+           - `blade_length_m`: 叶片长度（米）
+           - `rotation_speed_rpm`: 旋转速度（rpm）
+           - `rcs_dbsm`: RCS（dBm²）
+           - `blade_count`: 叶片数量
+           - `tower_diameter_m`: 塔筒直径（米）
+        
+        **示例CSV内容：**
+        ```csv
+        name,latitude,longitude,model,tower_height_m
+        风机01,39.9042,120.4074,V90-2.0MW,80
+        风机02,39.9142,120.4174,V90-2.0MW,80
+        风机03,39.9242,120.4274,SG2.5-130,100
+        ```
+        
+        **提示：** 您也可以先下载模板，填写后再上传。
+        """)
+        
+        # 提供CSV模板下载
+        template_df = pd.DataFrame([
+            {
+                'name': '风机01',
+                'latitude': 39.9042,
+                'longitude': 120.4074,
+                'model': 'V90-2.0MW',
+                'tower_height_m': 80,
+                'blade_length_m': 45,
+                'rotation_speed_rpm': 14,
+                'rcs_dbsm': 30,
+                'blade_count': 3,
+                'tower_diameter_m': 3.5
+            },
+            {
+                'name': '风机02',
+                'latitude': 39.9142,
+                'longitude': 120.4174,
+                'model': 'V90-2.0MW',
+                'tower_height_m': 80,
+                'blade_length_m': 45,
+                'rotation_speed_rpm': 14,
+                'rcs_dbsm': 30,
+                'blade_count': 3,
+                'tower_diameter_m': 3.5
+            }
+        ])
+        
+        csv_template = template_df.to_csv(index=False)
+        st.download_button(
+            label="📥 下载CSV模板",
+            data=csv_template,
+            file_name='turbine_template.csv',
+            mime='text/csv'
+        )
+    
+    # 文件上传
+    uploaded_file = st.file_uploader(
+        "上传风机坐标CSV文件",
+        type=['csv'],
+        help="支持.csv格式文件"
+    )
+    
+    if uploaded_file is not None:
+        turbines, error = parse_turbine_csv(uploaded_file)
+        
+        if error:
+            st.error(f"❌ {error}")
+        else:
+            st.success(f"✅ 成功解析 {len(turbines)} 个风机")
+            
+            # 显示预览
+            with st.expander("📋 数据预览", expanded=True):
+                preview_df = pd.DataFrame([
+                    {
+                        '名称': t['name'],
+                        '纬度': t['latitude'],
+                        '经度': t['longitude'],
+                        '型号': t['model'],
+                        '塔高(m)': t['tower_height_m']
+                    }
+                    for t in turbines
+                ])
+                st.dataframe(preview_df, use_container_width=True, hide_index=True)
+            
+            # 添加到场景按钮
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("➕ 添加到场景", type="primary", use_container_width=True):
+                    added_count = 0
+                    for turbine_data in turbines:
+                        new_turbine = Turbine(
+                            name=turbine_data['name'],
+                            model=turbine_data['model'],
+                            tower_height_m=turbine_data['tower_height_m'],
+                            blade_length_m=turbine_data['blade_length_m'],
+                            rotation_speed_rpm=turbine_data['rotation_speed_rpm'],
+                            rcs_dbsm=turbine_data['rcs_dbsm'],
+                            blade_count=turbine_data['blade_count'],
+                            tower_diameter_m=turbine_data['tower_diameter_m'],
+                            latitude=turbine_data['latitude'],
+                            longitude=turbine_data['longitude']
+                        )
+                        st.session_state.scene.add_turbine(new_turbine)
+                        added_count += 1
+                    
+                    st.success(f"✅ 已成功添加 {added_count} 个风机到场景")
+                    st.experimental_rerun()
+            
+            with col2:
+                if st.button("🗑️ 清空现有风机后添加", use_container_width=True):
+                    st.session_state.scene.clear_turbines()
+                    added_count = 0
+                    for turbine_data in turbines:
+                        new_turbine = Turbine(
+                            name=turbine_data['name'],
+                            model=turbine_data['model'],
+                            tower_height_m=turbine_data['tower_height_m'],
+                            blade_length_m=turbine_data['blade_length_m'],
+                            rotation_speed_rpm=turbine_data['rotation_speed_rpm'],
+                            rcs_dbsm=turbine_data['rcs_dbsm'],
+                            blade_count=turbine_data['blade_count'],
+                            tower_diameter_m=turbine_data['tower_diameter_m'],
+                            latitude=turbine_data['latitude'],
+                            longitude=turbine_data['longitude']
+                        )
+                        st.session_state.scene.add_turbine(new_turbine)
+                        added_count += 1
+                    
+                    st.success(f"✅ 已清空现有风机并添加 {added_count} 个新风机")
+                    st.experimental_rerun()
+
+
+def render_turbine_manual_config():
+    """渲染风机手动配置界面"""
     # 预设型号选择
     models = list(TURBINE_MODELS.keys())
-    selected_model = st.selectbox("选择风机型号", models)
+    selected_model = st.selectbox("选择风机型号", models, key="manual_model")
     
     # 获取预设参数
     defaults = TURBINE_MODELS[selected_model]
@@ -196,38 +380,44 @@ def render_turbine_config():
         col1, col2 = st.columns(2)
         
         with col1:
-            turbine_name = st.text_input("风机名称", value=f"风机{len(st.session_state.scene.turbines)+1}")
+            turbine_name = st.text_input("风机名称", value=f"风机{len(st.session_state.scene.turbines)+1}", key="manual_name")
             tower_height = st.number_input(
                 "塔筒高度 (m)",
                 min_value=20.0, max_value=200.0,
-                value=defaults["tower_height_m"], step=5.0
+                value=defaults["tower_height_m"], step=5.0,
+                key="manual_tower_height"
             )
             blade_length = st.number_input(
                 "叶片长度 (m)",
                 min_value=10.0, max_value=120.0,
-                value=defaults["blade_length_m"], step=5.0
+                value=defaults["blade_length_m"], step=5.0,
+                key="manual_blade_length"
             )
             rotation_speed = st.number_input(
                 "旋转速度 (rpm)",
                 min_value=5.0, max_value=30.0,
-                value=defaults["rotation_speed_rpm"], step=1.0
+                value=defaults["rotation_speed_rpm"], step=1.0,
+                key="manual_rotation_speed"
             )
         
         with col2:
             rcs = st.number_input(
                 "RCS (dBm²)",
                 min_value=10.0, max_value=60.0,
-                value=defaults["rcs_dbsm"], step=1.0
+                value=defaults["rcs_dbsm"], step=1.0,
+                key="manual_rcs"
             )
             blade_count = st.number_input(
                 "叶片数量",
                 min_value=2, max_value=5,
-                value=defaults["blade_count"], step=1
+                value=defaults["blade_count"], step=1,
+                key="manual_blade_count"
             )
             tower_diameter = st.number_input(
                 "塔筒直径 (m)",
                 min_value=2.0, max_value=10.0,
-                value=defaults["tower_diameter_m"], step=0.5
+                value=defaults["tower_diameter_m"], step=0.5,
+                key="manual_tower_diameter"
             )
     
     with st.expander("位置信息"):
@@ -249,7 +439,7 @@ def render_turbine_config():
         st.info(f"📍 风机位置: 纬度 {turbine_lat:.6f}, 经度 {turbine_lon:.6f} | 距离雷达: {distance_km:.2f} km")
     
     # 添加风机按钮
-    if st.button("➕ 添加风机", type="primary"):
+    if st.button("➕ 添加风机", type="primary", key="manual_add_button"):
         new_turbine = Turbine(
             name=turbine_name,
             model=selected_model,
@@ -295,6 +485,32 @@ def render_turbine_config():
         new_lon_offset = max(-100.0, min(100.0, new_lon_offset))
         st.session_state.pending_lat_offset = new_lat_offset
         st.session_state.pending_lon_offset = new_lon_offset
+
+
+def render_turbine_config():
+    """渲染风机参数配置"""
+    # 处理pending偏移量更新（必须在滑块渲染之前）
+    if st.session_state.pending_lat_offset is not None and st.session_state.pending_lon_offset is not None:
+        st.session_state.lat_offset_slider = st.session_state.pending_lat_offset
+        st.session_state.lon_offset_slider = st.session_state.pending_lon_offset
+        # 清除pending值
+        st.session_state.pending_lat_offset = None
+        st.session_state.pending_lon_offset = None
+    
+    st.subheader("🌪️ 风机参数配置")
+    
+    # 选择配置方式
+    config_mode = st.radio(
+        "选择配置方式",
+        ["手动添加", "CSV文件批量上传"],
+        horizontal=True,
+        help="手动添加：逐个配置风机位置；CSV上传：批量导入风机坐标"
+    )
+    
+    if config_mode == "手动添加":
+        render_turbine_manual_config()
+    else:
+        render_turbine_csv_upload()
 
 
 def render_target_config():
