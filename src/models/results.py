@@ -82,6 +82,24 @@ class DopplerResult:
     spectrum_data: dict = field(default_factory=dict)
     velocity_spread: float = 0.0          # 速度展宽 (m/s)
     
+    # 扩展的微多普勒特征
+    micro_doppler_data: dict = field(default_factory=dict)  # 微多普勒时频图数据
+    blade_tip_velocity: float = 0.0       # 叶片叶尖速度 (m/s)
+    blade_rotation_freq: float = 0.0      # 叶片旋转频率 (Hz)
+    modulation_period: float = 0.0        # 调制周期 (s)
+    
+    # 盲速分析
+    blind_velocity: float = 0.0           # 第一盲速 (m/s)
+    doppler_resolution: float = 0.0       # 多普勒分辨率 (Hz)
+    unambiguous_velocity: float = 0.0     # 不模糊速度范围 (m/s)
+    velocity_ambiguity_map: dict = field(default_factory=dict)  # 速度模糊图
+    
+    # MTI/MTD性能
+    mti_filter_response: dict = field(default_factory=dict)  # MTI滤波器速度响应
+    csr_improvement: float = 0.0          # 杂波抑制比改善 (dB)
+    clutter_spectrum_width: float = 0.0   # 杂波谱3dB带宽 (Hz)
+    notch_width: float = 0.0              # 滤波器凹口宽度 (m/s)
+    
     def get_risk_level(self) -> str:
         """获取风险等级"""
         if self.mti_degradation < 3:
@@ -101,7 +119,12 @@ class DopplerResult:
             'mti_degradation': self.mti_degradation,
             'spectrum_data': self.spectrum_data,
             'velocity_spread': self.velocity_spread,
-            'risk_level': self.get_risk_level()
+            'risk_level': self.get_risk_level(),
+            'micro_doppler_data': self.micro_doppler_data,
+            'blade_tip_velocity': self.blade_tip_velocity,
+            'blade_rotation_freq': self.blade_rotation_freq,
+            'blind_velocity': self.blind_velocity,
+            'doppler_resolution': self.doppler_resolution
         }
 
 

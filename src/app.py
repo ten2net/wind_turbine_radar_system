@@ -1226,53 +1226,438 @@ def render_scattering_results(result):
         st.dataframe(turbine_df, use_container_width=True)
 
 
+def generate_micro_doppler_spectrogram(rotation_rpm, blade_length, num_blades=3, duration=2.0, prf=1000):
+    """
+    生成风机微多普勒时频图数据
+    
+    Args:
+        rotation_rpm: 叶片转速 (rpm)
+        blade_length: 叶片长度 (m)
+        num_blades: 叶片数量
+        duration: 仿真时长 (秒)
+        prf: 脉冲重复频率 (Hz)
+    
+    Returns:
+        dict: 包含时间和频率轴的频谱数据
+    """
+    # 计算基本参数
+    rotation_freq = rotation_rpm / 60.0  # 旋转频率 (Hz)
+    rotation_period = 1.0 / rotation_freq  # 旋转周期 (s)
+    blade_tip_velocity = 2 * np.pi * blade_length * rotation_freq  # 叶尖线速度 (m/s)
+    
+    # 假设雷达波长为10cm (X波段)
+    wavelength = 0.1
+    
+    # 计算最大微多普勒频移
+    max_doppler = 2 * blade_tip_velocity / wavelength  # 最大频移 (Hz)
+    
+    # 时间轴
+    time = np.linspace(0, duration, int(duration * prf))
+    
+    # 频率轴
+    freq_resolution = 1 / duration
+    freqs = np.linspace(-max_doppler * 1.2, max_doppler * 1.2, 256)
+    
+    # 生成微多普勒时频图数据
+    spectrogram = np.zeros((len(freqs), len(time)))
+    
+    for blade_idx in range(num_blades):
+        blade_phase_offset = blade_idx * (2 * np.pi / num_blades)  # 叶片间相位差
+        
+        for t_idx, t in enumerate(time):
+            # 叶片旋转角度
+            theta = 2 * np.pi * rotation_freq * t + blade_phase_offset
+            
+            # 叶片不同部位的速度分量 (径向)
+            # 叶尖速度最大，叶根速度为0
+            for r_ratio in [0.2, 0.5, 0.8, 1.0]:  # 沿叶片不同位置
+                r = r_ratio * blade_length
+                v_radial = 2 * np.pi * rotation_freq * r * np.cos(theta)  # 径向速度分量
+                doppler_shift = 2 * v_radial / wavelength
+                
+                # 在时频图上添加能量
+                freq_idx = np.argmin(np.abs(freqs - doppler_shift))
+                if 0 <= freq_idx < len(freqs):
+                    # 高斯窗函数模拟频谱展宽
+                    amplitude = np.exp(-((freqs - doppler_shift) / (max_doppler * 0.05))**2)
+                    amplitude *= (r_ratio ** 0.5)  # 叶尖RCS更强
+                    spectrogram[:, t_idx] += amplitude
+    
+    # 添加塔筒回波 (零频附近)
+    tower_doppler_width = 50  # 塔筒多普勒展宽
+    tower_idx = np.argmin(np.abs(freqs - 0))
+    for t_idx in range(len(time)):
+        tower_spectrum = np.exp(-((freqs - 0) / tower_doppler_width)**2) * 0.3
+        spectrogram[:, t_idx] += tower_spectrum
+    
+    # 归一化
+    spectrogram = spectrogram / np.max(spectrogram)
+    
+    return {
+        'time': time,
+        'frequencies': freqs,
+        'spectrogram': spectrogram,
+        'rotation_period': rotation_period,
+        'max_doppler': max_doppler,
+        'blade_tip_velocity': blade_tip_velocity
+    }
+
+
 def render_doppler_results(result):
     """渲染多普勒分析结果"""
     doppler = result.doppler
     
-    # 指标卡片
-    col1, col2, col3 = st.columns(3)
+    # ========== 第一部分：基础指标卡片 ==========
+    st.subheader("📊 基础多普勒参数")
+    
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric(
             label="最大多普勒频移",
-            value=f"{doppler.max_doppler_shift:.0f} Hz"
+            value=f"{doppler.max_doppler_shift:.0f} Hz",
+            help="叶片叶尖产生的最大多普勒频移"
         )
     
     with col2:
         st.metric(
             label="多普勒带宽",
-            value=f"{doppler.doppler_bandwidth:.0f} Hz"
+            value=f"{doppler.doppler_bandwidth:.0f} Hz",
+            help="多普勒频谱的3dB带宽"
         )
     
     with col3:
         st.metric(
             label="速度展宽",
-            value=f"{doppler.velocity_spread:.1f} m/s"
+            value=f"{doppler.velocity_spread:.1f} m/s",
+            help="由叶片旋转引起的径向速度展宽"
+        )
+    
+    with col4:
+        st.metric(
+            label="MTI改善因子恶化",
+            value=f"{doppler.mti_degradation:.1f} dB",
+            help="风机杂波导致的MTI性能下降"
         )
     
     # 受影响的滤波器
-    st.info(f"🎯 受影响的滤波器: {', '.join(doppler.affected_filters)}")
+    if doppler.affected_filters:
+        st.info(f"🎯 受影响的滤波器: {', '.join(doppler.affected_filters)}")
     
-    # 多普勒频谱图
-    if doppler.spectrum_data:
-        fig = go.Figure()
-        radial_range = [0, 100]  # 默认范围
-        fig.add_trace(go.Scatter(
-            x=doppler.spectrum_data['frequencies'],
-            y=doppler.spectrum_data['amplitude'],
-            mode='lines',
-            fill='tozeroy',
-            name='频谱',
-            line=dict(color='purple', width=2)
-        ))
-        fig.update_layout(
-            title="多普勒频谱特征",
-            xaxis_title="频率 (Hz)",
-            yaxis_title="归一化幅度",
-            height=300
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # ========== 第二部分：多普勒频谱与时频分析 ==========
+    st.markdown("---")
+    st.subheader("🔬 高级多普勒分析")
+    
+    # 创建子标签页
+    doppler_tabs = st.tabs([
+        "📈 多普勒频谱", 
+        "⏱️ 微多普勒时频图", 
+        "🎯 盲速与模糊分析",
+        "🔧 MTI/MTD滤波器性能"
+    ])
+    
+    # Tab 1: 多普勒频谱
+    with doppler_tabs[0]:
+        if doppler.spectrum_data:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=doppler.spectrum_data['frequencies'],
+                    y=doppler.spectrum_data['amplitude'],
+                    mode='lines',
+                    fill='tozeroy',
+                    name='频谱',
+                    line=dict(color='purple', width=2)
+                ))
+                
+                # 添加杂波谱宽标注
+                clutter_width = getattr(doppler, 'clutter_spectrum_width', 0)
+                if clutter_width > 0:
+                    f_center = 0
+                    f_width = clutter_width / 2
+                    fig.add_vrect(
+                        x0=-f_width, x1=f_width,
+                        fillcolor="red", opacity=0.1,
+                        layer="below", line_width=0,
+                        annotation_text="杂波谱宽", annotation_position="top left"
+                    )
+                
+                fig.update_layout(
+                    title="多普勒频谱特征",
+                    xaxis_title="频率 (Hz)",
+                    yaxis_title="归一化幅度",
+                    height=350
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.markdown("#### 📋 频谱参数")
+                st.markdown(f"""
+                - **谱中心**: 0 Hz
+                - **谱宽度**: {doppler.doppler_bandwidth:.1f} Hz
+                - **3dB带宽**: {getattr(doppler, 'clutter_spectrum_width', 0):.1f} Hz
+                - **峰值幅度**: {np.max(doppler.spectrum_data['amplitude']):.2f}
+                - **平均幅度**: {np.mean(doppler.spectrum_data['amplitude']):.2f}
+                """)
+                
+                # 微多普勒特征说明
+                st.markdown("#### 🔄 微多普勒特征")
+                st.markdown(f"""
+                - **叶尖速度**: {getattr(doppler, 'blade_tip_velocity', 0):.1f} m/s
+                - **旋转频率**: {getattr(doppler, 'blade_rotation_freq', 0):.2f} Hz
+                - **调制周期**: {getattr(doppler, 'modulation_period', 0):.3f} s
+                """)
+        else:
+            st.info("暂无多普勒频谱数据")
+    
+    # Tab 2: 微多普勒时频图
+    with doppler_tabs[1]:
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # 使用默认参数生成微多普勒时频图
+            if st.session_state.scene and st.session_state.scene.turbines:
+                turbine = st.session_state.scene.turbines[0]  # 使用第一个风机
+                micro_data = generate_micro_doppler_spectrogram(
+                    rotation_rpm=turbine.rotation_speed_rpm,
+                    blade_length=turbine.blade_length_m,
+                    num_blades=turbine.blade_count,
+                    duration=2.0,
+                    prf=1000
+                )
+                num_blades_display = turbine.blade_count
+            else:
+                # 使用默认参数
+                micro_data = generate_micro_doppler_spectrogram(
+                    rotation_rpm=14.0,
+                    blade_length=45.0,
+                    num_blades=3,
+                    duration=2.0,
+                    prf=1000
+                )
+                num_blades_display = 3
+            
+            # 绘制时频图
+            fig = go.Figure(data=go.Heatmap(
+                z=micro_data['spectrogram'],
+                x=micro_data['time'],
+                y=micro_data['frequencies'] / 1000,  # 转换为kHz
+                colorscale='Jet',
+                colorbar=dict(title='幅度'),
+                hovertemplate='时间: %{x:.2f}s<br>频率: %{y:.1f}kHz<br>幅度: %{z:.2f}<extra></extra>'
+            ))
+            
+            # 添加周期标注线
+            for i in range(1, int(2.0 / micro_data['rotation_period']) + 1):
+                t_line = i * micro_data['rotation_period']
+                if t_line < 2.0:
+                    fig.add_vline(x=t_line, line_dash="dash", line_color="white", opacity=0.5)
+            
+            fig.update_layout(
+                title=f"微多普勒时频图 (Spectrogram)<br><sub>叶尖速度: {micro_data['blade_tip_velocity']:.1f} m/s | 旋转周期: {micro_data['rotation_period']:.3f}s</sub>",
+                xaxis_title="时间 (s)",
+                yaxis_title="多普勒频率 (kHz)",
+                height=400
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.markdown("#### 📖 时频图解读")
+            st.markdown(f"""
+            **图中特征:**
+            
+            🎯 **中心亮带** (0 kHz附近)
+            - 塔筒和轮毂的回波
+            - 多普勒频移接近零
+            
+            🌊 **正弦调制曲线** 
+            - 叶片旋转产生的微多普勒
+            - 峰值对应叶尖朝向/背向雷达
+            - 谷值对应叶片垂直于视线
+            
+            ⚡ **多叶片干涉**
+            - {num_blades_display}个叶片产生{num_blades_display}组调制曲线
+            - 相位差{360//num_blades_display}°
+            
+            📏 **周期特征**
+            - 白色虚线标记旋转周期
+            - 周期 = {micro_data['rotation_period']:.3f}s
+            """)
+    
+    # Tab 3: 盲速与模糊分析
+    with doppler_tabs[2]:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### 🎯 盲速分析")
+            
+            # 盲速参数
+            blind_v = getattr(doppler, 'blind_velocity', 0)
+            if blind_v > 0:
+                st.markdown(f"""
+                | 参数 | 数值 | 说明 |
+                |------|------|------|
+                | **第一盲速** | {blind_v:.1f} m/s | 速度模糊间隔 |
+                | **不模糊速度** | ±{getattr(doppler, 'unambiguous_velocity', blind_v/2):.1f} m/s | 无模糊测量范围 |
+                | **多普勒分辨率** | {getattr(doppler, 'doppler_resolution', 0):.2f} Hz | 最小可分辨频差 |
+                | **速度分辨率** | {getattr(doppler, 'doppler_resolution', 0) * 0.1:.2f} m/s | 等效速度分辨率 |
+                """)
+            else:
+                # 使用默认值
+                blind_v = 150.0  # 假设第一盲速
+                unambiguous_v = 75.0
+                st.markdown(f"""
+                | 参数 | 数值 | 说明 |
+                |------|------|------|
+                | **第一盲速** | {blind_v:.1f} m/s | 速度模糊间隔 |
+                | **不模糊速度** | ±{unambiguous_v:.1f} m/s | 无模糊测量范围 |
+                | **速度分辨率** | 0.5 m/s | 等效速度分辨率 |
+                """)
+            
+            st.info("""
+            💡 **盲速现象**: 当目标径向速度等于盲速的整数倍时，
+            目标回波会落入多普勒滤波器的零陷而被抑制，导致检测丢失。
+            """)
+        
+        with col2:
+            st.markdown("#### 📊 速度模糊图")
+            
+            # 绘制速度模糊图
+            velocities = np.linspace(-200, 200, 401)  # 速度范围 ±200 m/s
+            
+            # 计算模糊速度谱 (假设PRF导致的周期性模糊)
+            v_blind = getattr(doppler, 'blind_velocity', 150.0)
+            ambiguity = np.abs(np.sinc(velocities / v_blind))  # sinc函数模拟模糊
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=velocities, y=ambiguity,
+                mode='lines',
+                name='速度模糊函数',
+                line=dict(color='blue', width=2)
+            ))
+            
+            # 标记盲速位置
+            for n in [-2, -1, 0, 1, 2]:
+                v_n = n * v_blind
+                if -200 <= v_n <= 200:
+                    fig.add_vline(x=v_n, line_dash="dash", line_color="red", opacity=0.5)
+            
+            # 标记风机杂波速度范围
+            clutter_v_max = doppler.velocity_spread if doppler.velocity_spread > 0 else 50.0
+            fig.add_vrect(
+                x0=-clutter_v_max, x1=clutter_v_max,
+                fillcolor="yellow", opacity=0.2,
+                layer="below", line_width=0,
+                annotation_text="风机杂波区", annotation_position="top"
+            )
+            
+            fig.update_layout(
+                title="速度模糊函数与盲速",
+                xaxis_title="目标速度 (m/s)",
+                yaxis_title="模糊程度",
+                height=300,
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Tab 4: MTI/MTD滤波器性能
+    with doppler_tabs[3]:
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("#### 🔧 MTI/MTD滤波器速度响应")
+            
+            # 生成MTI滤波器速度响应曲线
+            velocities = np.linspace(-100, 100, 201)  # 速度范围
+            
+            # 单延迟对消器 (MTI) 响应
+            # H(f) = 2|sin(πf/f_r)|, 其中f_r是PRF
+            prf = 1000  # 假设PRF
+            mti_response = np.abs(2 * np.sin(np.pi * velocities / 75))  # 简化的MTI响应
+            mti_response = np.clip(mti_response, 0, 2)
+            
+            # MTD (多普勒滤波器组) 响应 - 示例一个滤波器
+            mtd_center = 30  # 滤波器中心速度
+            mtd_bw = 10      # 滤波器带宽
+            mtd_response = np.exp(-((velocities - mtd_center) / (mtd_bw / 2.355))**2)
+            
+            fig = go.Figure()
+            
+            # MTI响应
+            fig.add_trace(go.Scatter(
+                x=velocities, y=mti_response,
+                mode='lines',
+                name='MTI滤波器 (凹口型)',
+                line=dict(color='red', width=2)
+            ))
+            
+            # MTD滤波器响应
+            fig.add_trace(go.Scatter(
+                x=velocities, y=mtd_response,
+                mode='lines',
+                name=f'MTD滤波器 ({mtd_center}m/s)',
+                line=dict(color='green', width=2)
+            ))
+            
+            # 标记凹口宽度
+            notch_width = getattr(doppler, 'notch_width', 5.0)
+            fig.add_vrect(
+                x0=-notch_width/2, x1=notch_width/2,
+                fillcolor="red", opacity=0.1,
+                layer="below", line_width=0,
+                annotation_text="MTI零速凹口", annotation_position="top left"
+            )
+            
+            # 标记风机杂波速度
+            clutter_v = doppler.velocity_spread if doppler.velocity_spread > 0 else 50.0
+            fig.add_vrect(
+                x0=-clutter_v, x1=clutter_v,
+                fillcolor="orange", opacity=0.1,
+                layer="below", line_width=0,
+                annotation_text="风机杂波展宽", annotation_position="top right"
+            )
+            
+            fig.update_layout(
+                title="MTI/MTD滤波器速度响应特性",
+                xaxis_title="目标径向速度 (m/s)",
+                yaxis_title="滤波器增益 (归一化)",
+                height=350,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.markdown("#### 📋 滤波器性能指标")
+            
+            csr = getattr(doppler, 'csr_improvement', 35.0)
+            notch = getattr(doppler, 'notch_width', 5.0)
+            
+            st.markdown(f"""
+            **MTI性能:**
+            - 杂波抑制比 (CSR): **{csr:.1f} dB**
+            - 零速凹口宽度: **±{notch/2:.1f} m/s**
+            - 改善因子恶化: **{doppler.mti_degradation:.1f} dB**
+            
+            **MTD性能:**
+            - 滤波器数量: 8-16个
+            - 多普勒分辨率: 根据PRF
+            - 信杂比改善: **{csr + 10:.1f} dB**
+            
+            **风机影响:**
+            - 由于风机杂波具有多普勒展宽，
+              传统的零速MTI无法完全抑制
+            - 部分杂波会泄漏到相邻的多普勒通道
+            """)
+            
+            if doppler.mti_degradation > 5:
+                st.warning(f"⚠️ MTI性能严重恶化 ({doppler.mti_degradation:.1f} dB)，建议采用自适应MTI或MTD技术")
+            elif doppler.mti_degradation > 3:
+                st.info(f"ℹ️ MTI性能中度恶化 ({doppler.mti_degradation:.1f} dB)，需要关注低速目标检测")
+            else:
+                st.success(f"✅ MTI性能良好 ({doppler.mti_degradation:.1f} dB)")
 
 
 def create_gauge_chart(title, value, threshold, unit, color):
