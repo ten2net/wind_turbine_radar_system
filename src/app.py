@@ -1569,42 +1569,111 @@ def render_diffraction_results(result):
         ])
         st.dataframe(terrain_df, use_container_width=True)
     
-    # 绕射损耗与距离关系图（简化）
-    st.subheader("绕射损耗趋势")
+    # 绕射损耗可视化
+    st.subheader("绕射损耗可视化")
     
-    # 生成模拟数据
-    distances = np.linspace(1000, 10000, 10)  # 1-10km
-    simulated_losses = 20 * np.log10(distances / 1000) + np.random.normal(0, 2, len(distances))
+    if not diffraction.terrain_shadowing:
+        st.info("暂无风机绕射数据")
+        return
     
+    # 创建简化直观的柱状图
+    st.markdown("### 📊 各风机绕射损耗对比")
+    
+    # 准备数据
+    turbine_names = [item['turbine_name'] for item in diffraction.terrain_shadowing]
+    losses = [item['knife_edge_loss'] for item in diffraction.terrain_shadowing]
+    distances = [item['distance'] / 1000 for item in diffraction.terrain_shadowing]  # 转换为km
+    blockage_ratios = [item['blockage_ratio'] for item in diffraction.terrain_shadowing]
+    
+    # 创建双轴图：柱状图显示损耗，折线显示距离
     fig = go.Figure()
-    radial_range = [0, 100]  # 默认范围
-    fig.add_trace(go.Scatter(
-        x=distances,
-        y=simulated_losses,
-        mode='lines+markers',
-        name='绕射损耗趋势',
-        line=dict(color='orange', width=2),
-        marker=dict(size=8, color='red')
+    
+    # 柱状图 - 绕射损耗
+    colors = ['🟢' if l < 5 else '🟡' if l < 15 else '🔴' for l in losses]
+    bar_colors = ['#4CAF50' if l < 5 else '#FFC107' if l < 15 else '#F44336' for l in losses]
+    
+    # 根据风机数量动态调整柱子宽度，避免风机少时柱子太宽
+    num_turbines = len(turbine_names)
+    bar_width = min(0.4, 0.8 / num_turbines) if num_turbines > 0 else 0.4
+    
+    fig.add_trace(go.Bar(
+        x=turbine_names,
+        y=losses,
+        name='绕射损耗 (dB)',
+        marker_color=bar_colors,
+        width=bar_width,  # 限制柱子最大宽度
+        text=[f"{l:.1f} dB" for l in losses],
+        textposition='outside',
+        hovertemplate='<b>%{x}</b><br>绕射损耗: %{y:.1f} dB<extra></extra>'
     ))
     
-    # 添加当前点
-    if diffraction.terrain_shadowing:
-        avg_distance = np.mean([item['distance'] for item in diffraction.terrain_shadowing])
-        fig.add_trace(go.Scatter(
-            x=[avg_distance],
-            y=[diffraction.knife_edge_loss],
-            mode='markers',
-            name='当前配置',
-            marker=dict(size=12, color='green', symbol='star')
-        ))
+    # 折线 - 距离
+    fig.add_trace(go.Scatter(
+        x=turbine_names,
+        y=distances,
+        name='距离 (km)',
+        mode='lines+markers+text',
+        line=dict(color='#2196F3', width=2),
+        marker=dict(size=8, color='#2196F3'),
+        text=[f"{d:.1f}km" for d in distances],
+        textposition='top center',
+        textfont=dict(size=14, color='white'),
+        yaxis='y2',
+        hovertemplate='<b>%{x}</b><br>距离: %{y:.1f} km<extra></extra>'
+    ))
     
     fig.update_layout(
-        title="绕射损耗随距离变化趋势",
-        xaxis_title="距离 (m)",
-        yaxis_title="绕射损耗 (dB)",
-        height=300
+        title=dict(
+            text="各风机绕射损耗与距离关系",
+            font=dict(size=16)
+        ),
+        xaxis_title="风机",
+        yaxis=dict(
+            title="绕射损耗 (dB)",
+            # titlefont=dict(color='#333'),
+            tickfont=dict(color='#333'),
+            range=[0, max(losses) * 1.3]
+        ),
+        yaxis2=dict(
+            title="距离 (km)",
+            # titlefont=dict(color='#2196F3'),
+            tickfont=dict(color='#2196F3'),
+            overlaying='y',
+            side='right',
+            range=[0, max(distances) * 1.5]
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5
+        ),
+        barmode='group',
+        height=400,
+        showlegend=True
     )
+    
     st.plotly_chart(fig, use_container_width=True)
+    
+    # 风险等级说明
+    st.markdown("""
+    **📈 绕射损耗风险等级：**
+    - 🟢 **绿色 (< 5 dB)**：低风险，对雷达性能影响较小
+    - 🟡 **黄色 (5-15 dB)**：中等风险，雷达性能有一定下降
+    - 🔴 **红色 (> 15 dB)**：高风险，雷达探测能力严重受限
+    """)
+    
+    # 详细数据表格
+    with st.expander("📋 查看详细数据"):
+        df = pd.DataFrame({
+            '风机名称': turbine_names,
+            '距离 (km)': [f"{d:.2f}" for d in distances],
+            '绕射损耗 (dB)': [f"{l:.1f}" for l in losses],
+            '遮挡比': [f"{b:.2f}" for b in blockage_ratios],
+            '风险等级': ['🟢 低' if l < 5 else '🟡 中' if l < 15 else '🔴 高' for l in losses]
+        })
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
 
 def calculate_turbine_rcs(turbine, azimuth_deg, elevation_deg=0.0, frequency_ghz=3.0):
