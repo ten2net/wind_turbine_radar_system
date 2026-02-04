@@ -1661,43 +1661,62 @@ def render_doppler_results(result):
 
 
 def create_gauge_chart(title, value, threshold, unit, color):
-    """创建仪表盘图表"""
-    # 计算百分比（0-100%）
-    percentage = min(100, max(0, (1 - value / threshold) * 100)) if threshold > 0 else 0
+    """创建仪表盘图表 - 显示实际误差值和风险等级"""
+    
+    # 计算风险等级（0-100%），误差越大风险越高
+    # 当误差 <= 阈值时，风险为0%
+    # 当误差 > 阈值时，风险按比例增加，最大100%
+    if threshold > 0:
+        if value <= threshold:
+            risk_percentage = 0
+        else:
+            # 计算超出阈值的比例，使用对数压缩避免超大值
+            ratio = value / threshold
+            # 使用对数映射：ratio=2->30%, ratio=5->50%, ratio=10->70%, ratio=100->100%
+            risk_percentage = min(100, 30 + 35 * np.log10(ratio))
+    else:
+        risk_percentage = 0
+    
+    # 确定显示范围：最大值至少是阈值的2倍或实际误差的1.2倍
+    display_max = max(threshold * 2, value * 1.2, threshold * 1.5)
     
     fig = go.Figure(go.Indicator(
-        mode="gauge+number+delta",
-        value=percentage,
-        number={'suffix': '%', 'font': {'size': 24}},
-        title={'text': title, 'font': {'size': 16}},
-        delta={'reference': 100, 'relative': False, 'valueformat': '.1f', 'suffix': '%'},
+        mode="gauge+number",
+        value=value,
+        number={'suffix': unit, 'font': {'size': 20}, 'valueformat': '.2f' if value < 10 else '.1f'},
+        title={'text': title, 'font': {'size': 14}},
         gauge={
-            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'axis': {
+                'range': [0, display_max],
+                'tickwidth': 2,
+                'tickcolor': "gray",
+                'tickfont': {'size': 10}
+            },
             'bar': {'color': color, 'thickness': 0.75},
             'bgcolor': "white",
             'borderwidth': 2,
             'bordercolor': "gray",
             'steps': [
-                {'range': [0, 30], 'color': '#ffcccc'},  # 红色区域 - 差
-                {'range': [30, 70], 'color': '#ffffcc'}, # 黄色区域 - 中
-                {'range': [70, 100], 'color': '#ccffcc'} # 绿色区域 - 好
+                {'range': [0, threshold * 0.5], 'color': '#ccffcc'},   # 绿色 - 优秀 (<50%阈值)
+                {'range': [threshold * 0.5, threshold], 'color': '#ffffcc'},  # 黄色 - 良好 (50%-100%阈值)
+                {'range': [threshold, display_max], 'color': '#ffcccc'}  # 红色 - 超标 (>阈值)
             ],
             'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': 70
+                'line': {'color': "red", 'width': 3},
+                'thickness': 0.8,
+                'value': threshold  # 阈值线位置
             }
         }
     ))
     
     fig.update_layout(
-        height=300,
-        margin=dict(l=20, r=20, t=50, b=20),
+        height=280,
+        margin=dict(l=20, r=20, t=40, b=20),
         paper_bgcolor="white",
         font={'size': 12}
     )
     
-    return fig, percentage
+    return fig, risk_percentage
 
 
 def render_accuracy_results(result):
@@ -1710,6 +1729,14 @@ def render_accuracy_results(result):
     velocity_threshold = 5.0 # 米/秒 - 测速误差阈值
     
     st.subheader("📊 精度指标单独分析")
+    st.info("""
+    📖 **仪表盘说明**：
+    - **指针位置**：显示实际误差值
+    - **红色竖线**：表示精度阈值（允许的最大误差）
+    - **绿色区域** (0-50%阈值)：优秀，误差远小于阈值
+    - **黄色区域** (50%-100%阈值)：良好，误差接近但未超阈值
+    - **红色区域** (>阈值)：超标，误差超过允许范围
+    """)
     
     # 创建三个独立的仪表盘
     col1, col2, col3 = st.columns(3)
@@ -1717,7 +1744,7 @@ def render_accuracy_results(result):
     with col1:
         st.markdown("**🎯 测角精度**")
         angle_fig, angle_pct = create_gauge_chart(
-            f"误差: {accuracy.angle_error:.3f}°",
+            f"测角误差",
             accuracy.angle_error,
             angle_threshold,
             "°",
@@ -1729,7 +1756,7 @@ def render_accuracy_results(result):
     with col2:
         st.markdown("**📏 测距精度**")
         range_fig, range_pct = create_gauge_chart(
-            f"误差: {accuracy.range_error:.0f}m",
+            f"测距误差",
             accuracy.range_error,
             range_threshold,
             "m",
@@ -1741,7 +1768,7 @@ def render_accuracy_results(result):
     with col3:
         st.markdown("**🚀 测速精度**")
         velocity_fig, velocity_pct = create_gauge_chart(
-            f"误差: {accuracy.velocity_error:.1f}m/s",
+            f"测速误差",
             accuracy.velocity_error,
             velocity_threshold,
             "m/s",
