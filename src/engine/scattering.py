@@ -177,22 +177,42 @@ class ScatteringModel:
     
     def _calculate_range_profile(self, radar: RadarConfig, turbines: List[Turbine], 
                                   wavelength: float, num_points: int = 100) -> List[float]:
-        """计算距离剖面干扰"""
-        max_range = radar.max_range_km * 1000
-        ranges = np.linspace(1000, max_range, num_points)
+        """计算距离剖面干扰
+        
+        生成从1km到雷达最大探测距离的距离剖面，显示每个距离门内的总干扰功率。
+        每个风机只在其真实距离位置附近的距离门产生干扰峰值。
+        """
+        max_range = radar.max_range_km * 1000  # 转换为米
+        ranges = np.linspace(1000, max_range, num_points)  # 距离门位置（米）
         profile = []
         
+        # 预计算所有风机的距离和干扰功率
+        turbine_data = []
+        for turbine in turbines:
+            distance = self._calculate_distance(radar, turbine)
+            power = self._calculate_radar_return(
+                radar, turbine.rcs_dbsm, distance, wavelength
+            )
+            turbine_data.append({
+                'distance': distance,  # 风机实际距离（米）
+                'power': power,  # 干扰功率（dBm）
+                'power_linear': 10 ** (power / 10)  # 线性功率
+            })
+        
+        # 为每个距离门计算总干扰
         for r in ranges:
-            # 计算该距离处的总干扰
             total_power = 0.0
-            for turbine in turbines:
-                distance = self._calculate_distance(radar, turbine)
-                # 只考虑距离分辨率范围内的风机
-                if abs(distance - r) < radar.range_resolution_m:
-                    power = self._calculate_radar_return(
-                        radar, turbine.rcs_dbsm, distance, wavelength
-                    )
-                    total_power += 10 ** (power / 10)
+            
+            for td in turbine_data:
+                # 只在该距离门与风机实际距离相差不超过半个距离分辨率时计入
+                # 使用高斯窗函数模拟距离分辨率的权重
+                distance_diff = abs(td['distance'] - r)
+                # 使用高斯权重：在距离分辨率内权重高，超出后快速衰减
+                sigma = radar.range_resolution_m / 2.355  # 3dB带宽对应的高斯sigma
+                weight = np.exp(-(distance_diff / sigma) ** 2 / 2)
+                
+                if weight > 0.01:  # 忽略极小权重
+                    total_power += td['power_linear'] * weight
             
             profile_dbm = 10 * np.log10(total_power) if total_power > 0 else -200
             profile.append(round(profile_dbm, 2))

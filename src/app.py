@@ -1194,21 +1194,71 @@ def render_scattering_results(result):
     # 距离剖面图
     if scattering.range_profile:
         fig = go.Figure()
-        radial_range = [0, 100]  # 默认范围
+        
+        # 距离剖面范围：从1km到雷达最大探测距离，共100个点
+        # 需要从session_state获取雷达配置来确定实际距离范围
+        if st.session_state.scene and st.session_state.scene.radar:
+            max_range_km = st.session_state.scene.radar.max_range_km
+        else:
+            max_range_km = 60  # 默认值
+        
+        # 生成实际距离轴 (1km 到 max_range_km)
+        distances_km = np.linspace(1, max_range_km, len(scattering.range_profile))
+        
+        # 找到干扰峰值位置用于说明
+        peak_idx = np.argmax(scattering.range_profile)
+        peak_distance = distances_km[peak_idx]
+        peak_power = scattering.range_profile[peak_idx]
+        
         fig.add_trace(go.Scatter(
-            x=list(range(len(scattering.range_profile))),
+            x=distances_km,
             y=scattering.range_profile,
             mode='lines',
             name='干扰功率',
-            line=dict(color='orange', width=2)
+            line=dict(color='orange', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(255, 165, 0, 0.3)'
         ))
+        
+        # 如果有受影响的风机，标记它们的位置
+        if scattering.affected_turbines:
+            for turbine in scattering.affected_turbines:
+                distance_km = turbine.get('distance_km', 0)
+                power_dbm = turbine.get('power_dbm', -100)
+                name = turbine.get('turbine_name', '未知')
+                
+                # 找到该距离在剖面上的近似功率值
+                idx = np.argmin(np.abs(distances_km - distance_km))
+                profile_power = scattering.range_profile[idx]
+                
+                fig.add_trace(go.Scatter(
+                    x=[distance_km],
+                    y=[profile_power],
+                    mode='markers',
+                    name=f"{name} ({distance_km:.1f}km)",
+                    marker=dict(size=12, color='red', symbol='diamond', line=dict(color='darkred', width=2)),
+                    hovertemplate=f"风机: {name}<br>实际距离: {distance_km:.2f} km<br>干扰功率: {power_dbm:.1f} dBm<br>剖面功率: {profile_power:.1f} dBm<extra></extra>"
+                ))
+        
         fig.update_layout(
-            title="距离剖面干扰分布",
-            xaxis_title="距离单元",
+            title=f"距离剖面干扰分布<br><sub>峰值位置: {peak_distance:.1f}km ({peak_power:.1f}dBm) | 显示范围: 1-{max_range_km}km</sub>",
+            xaxis_title="距离 (km)",
             yaxis_title="干扰功率 (dBm)",
-            height=300
+            height=400,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            xaxis=dict(range=[0, max_range_km * 1.1])  # x轴稍微延伸以便看清标记
         )
         st.plotly_chart(fig, use_container_width=True)
+        
+        # 添加图表说明
+        st.info(f"""
+        📊 **距离剖面说明**：
+        - **横轴范围**：1km ~ {max_range_km}km（雷达最大探测距离）
+        - **峰值位置**：{peak_distance:.1f}km 处有干扰峰值 {peak_power:.1f}dBm
+        - **红色菱形**：风机实际位置标记
+        - **干扰来源**：距离剖面显示的是**雷达距离门内**的干扰功率分布，峰值不一定在风机正位置，
+          而是取决于雷达距离分辨率（{st.session_state.scene.radar.range_resolution_m if st.session_state.scene and st.session_state.scene.radar else '未知'}m）和信号处理
+        """)
     
     # 各风机干扰详情
     if scattering.affected_turbines:
