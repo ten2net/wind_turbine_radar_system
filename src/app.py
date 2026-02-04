@@ -1607,6 +1607,323 @@ def render_diffraction_results(result):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def calculate_turbine_rcs(turbine, azimuth_deg, elevation_deg=0.0, frequency_ghz=3.0):
+    """
+    计算单个风机的RCS值
+    
+    基于物理模型：
+    - 塔筒：金属圆柱体，使用圆柱体RCS公式
+    - 叶片：玻璃钢材质，RCS较低
+    
+    Args:
+        turbine: 风机对象
+        azimuth_deg: 方位角（度）
+        elevation_deg: 俯仰角（度，默认为0）
+        frequency_ghz: 雷达频率（GHz）
+    
+    Returns:
+        rcs_dbsm: RCS值（dBm²）
+    """
+    import numpy as np
+    
+    # 波长计算
+    c = 3e8  # 光速 m/s
+    wavelength = c / (frequency_ghz * 1e9)  # 波长（米）
+    k = 2 * np.pi / wavelength  # 波数
+    
+    # 转换角度为弧度
+    azimuth = np.radians(azimuth_deg)
+    elevation = np.radians(elevation_deg)
+    
+    # 塔筒参数
+    tower_height = turbine.tower_height_m
+    tower_diameter = turbine.tower_diameter_m
+    
+    # 叶片参数
+    blade_length = turbine.blade_length_m
+    blade_width = 3.0  # 叶片宽度约3米
+    num_blades = turbine.blade_count
+    
+    # ========== 塔筒RCS计算（金属圆柱体）==========
+    # 塔筒等效圆柱体RCS
+    # 使用圆柱体RCS近似公式
+    
+    # 计算有效照射面积
+    # 俯仰角影响：仰视角度越大，看到的塔筒侧面越少
+    elevation_factor = np.abs(np.cos(elevation))
+    
+    # 塔筒物理RCS（圆柱体镜面反射 + 边缘绕射）
+    # 镜面反射分量（垂直入射时最大）
+    if np.abs(np.cos(azimuth)) > 0.1:  # 避免除零
+        specular_rcs = (k * tower_diameter * tower_height**2 / 2) * np.abs(np.cos(azimuth)) * elevation_factor
+    else:
+        specular_rcs = 0
+    
+    # 边缘绕射分量
+    edge_rcs = (tower_height * tower_diameter / 4) * np.abs(np.sin(azimuth))
+    
+    # 塔筒总RCS（金属材质，反射强）
+    tower_rcs_linear = specular_rcs + edge_rcs + 0.1  # 最小值避免log(0)
+    
+    # 塔筒RCS波动（模拟表面粗糙度和结构细节）
+    # 使用正弦函数模拟周期性波动，加入随机分量
+    fluctuation = 1 + 0.3 * np.sin(4 * azimuth) + 0.2 * np.sin(8 * azimuth)
+    # 方位角相关调制（塔筒侧面vs正面）
+    azimuth_modulation = 0.6 + 0.4 * np.abs(np.cos(azimuth))
+    
+    tower_rcs_linear *= fluctuation * azimuth_modulation
+    
+    # 频率影响：低频（VHF）RCS大，高频（Ku）RCS小
+    # 这是由于高频在粗糙表面产生更多漫散射
+    freq_factor_tower = (3.0 / frequency_ghz) ** 0.5  # 频率修正因子
+    tower_rcs_linear *= freq_factor_tower
+    
+    # ========== 叶片RCS计算（玻璃钢材质）==========
+    # 玻璃钢材质RCS比金属低很多（约-15到-20dB）
+    material_loss_db = 18.0  # 玻璃钢相比金属的衰减
+    
+    # 叶片旋转产生的RCS调制
+    blade_rotation_angle = np.radians(azimuth_deg * 2)  # 假设叶片旋转与方位角相关
+    
+    # 单个叶片RCS（平板近似）
+    # 叶片在不同姿态下的RCS变化
+    blade_aspect_angle = azimuth + blade_rotation_angle
+    
+    # 叶片镜面反射（当叶片垂直于雷达视线时最强）
+    blade_specular = (k * blade_length**2 * blade_width / (4 * np.pi)) * \
+                     np.abs(np.cos(blade_aspect_angle))**2 * np.abs(np.cos(elevation))
+    
+    # 叶片边缘散射
+    blade_edge = blade_length * blade_width * 0.1 * np.abs(np.sin(blade_aspect_angle))
+    
+    # 单个叶片RCS
+    single_blade_rcs = blade_specular + blade_edge + 0.05
+    
+    # 多叶片干涉（3个叶片在空间中分散）
+    # 叶片间角度间隔：120度
+    blade_separation = 2 * np.pi / num_blades
+    
+    # 考虑叶片之间相对位置导致的相干/非相干散射
+    total_blade_rcs = 0
+    for i in range(num_blades):
+        blade_angle_offset = i * blade_separation
+        blade_phase = k * blade_length * np.sin(elevation) * np.cos(blade_rotation_angle + blade_angle_offset)
+        interference_factor = 1 + 0.5 * np.cos(blade_phase)  # 干涉因子
+        total_blade_rcs += single_blade_rcs * interference_factor
+    
+    # 玻璃钢材质衰减
+    blade_rcs_linear = total_blade_rcs / num_blades * (10 ** (-material_loss_db / 10))
+    
+    # 频率对叶片RCS的影响（高频在复合材料中衰减更大）
+    freq_factor_blade = (3.0 / frequency_ghz) ** 0.3
+    blade_rcs_linear *= freq_factor_blade
+    
+    # ========== 总RCS计算 ==========
+    # 相干叠加（塔筒和叶片在不同位置，近似非相干叠加）
+    total_rcs_linear = tower_rcs_linear + blade_rcs_linear
+    
+    # 转换为dBm²
+    total_rcs_dbsm = 10 * np.log10(total_rcs_linear)
+    
+    # 添加随机起伏（RCS闪烁）
+    # 高频闪烁更明显
+    scintillation_db = np.random.normal(0, 1.5 * (frequency_ghz / 3.0) ** 0.5)
+    total_rcs_dbsm += scintillation_db
+    
+    return total_rcs_dbsm
+
+
+def render_rcs_simulation():
+    """渲染风机RCS仿真结果"""
+    
+    if not st.session_state.scene.turbines:
+        st.warning("⚠️ 请先添加至少一台风机")
+        return
+    
+    # 选择要仿真的风机
+    turbine_names = [t.name for t in st.session_state.scene.turbines]
+    selected_turbine_name = st.selectbox("选择要仿真的风机", turbine_names)
+    selected_turbine = next(t for t in st.session_state.scene.turbines if t.name == selected_turbine_name)
+    
+    # 显示风机参数
+    st.info(f"📍 **{selected_turbine.name}** 参数 | "
+            f"型号: {selected_turbine.model} | "
+            f"塔高: {selected_turbine.tower_height_m}m | "
+            f"叶片长: {selected_turbine.blade_length_m}m | "
+            f"塔筒直径: {selected_turbine.tower_diameter_m}m | "
+            f"叶片数: {selected_turbine.blade_count}")
+    
+    # 仿真配置
+    col1, col2 = st.columns(2)
+    with col1:
+        elevation_angle = st.number_input("俯仰角 (°)", min_value=-30.0, max_value=30.0, value=0.0, step=1.0,
+                                         help="0°表示水平照射，正值为仰角，负值为俯角")
+    with col2:
+        st.markdown("**仿真设置**：方位间隔 1°，覆盖 0°-360°")
+    
+    # 雷达波段配置
+    bands = {
+        'VHF': {'freq_ghz': 0.15, 'color': '#8B0000', 'desc': 'VHF (30-300MHz)'},
+        'L': {'freq_ghz': 1.5, 'color': '#FF0000', 'desc': 'L波段 (1-2GHz)'},
+        'S': {'freq_ghz': 3.0, 'color': '#FF8C00', 'desc': 'S波段 (2-4GHz)'},
+        'C': {'freq_ghz': 5.5, 'color': '#FFD700', 'desc': 'C波段 (4-8GHz)'},
+        'X': {'freq_ghz': 10.0, 'color': '#32CD32', 'desc': 'X波段 (8-12GHz)'},
+        'Ku': {'freq_ghz': 15.0, 'color': '#1E90FF', 'desc': 'Ku波段 (12-18GHz)'}
+    }
+    
+    # 选择要显示的波段
+    selected_bands = st.multiselect(
+        "选择要仿真的雷达波段",
+        list(bands.keys()),
+        default=['S', 'C', 'X', 'Ku'],
+        format_func=lambda x: bands[x]['desc']
+    )
+    
+    if not selected_bands:
+        st.info("请至少选择一个波段进行仿真")
+        return
+    
+    # 计算RCS数据
+    azimuths = np.arange(0, 361, 1)  # 0-360度，间隔1度
+    
+    with st.spinner("正在计算RCS..."):
+        rcs_data = {}
+        for band_name in selected_bands:
+            band = bands[band_name]
+            rcs_values = []
+            for azimuth in azimuths:
+                rcs = calculate_turbine_rcs(
+                    selected_turbine,
+                    azimuth,
+                    elevation_angle,
+                    band['freq_ghz']
+                )
+                rcs_values.append(rcs)
+            rcs_data[band_name] = rcs_values
+    
+    # 创建极坐标图
+    fig = go.Figure()
+    
+    for band_name in selected_bands:
+        band = bands[band_name]
+        fig.add_trace(go.Scatterpolar(
+            r=rcs_data[band_name],
+            theta=azimuths,
+            mode='lines',
+            name=band['desc'],
+            line=dict(color=band['color'], width=2),
+            hovertemplate='方位: %{theta}°<br>RCS: %{r:.1f} dBm²<extra>' + band_name + '波段</extra>'
+        ))
+    
+    # 更新布局
+    max_rcs = max([max(rcs_data[b]) for b in selected_bands]) * 1.1
+    
+    fig.update_layout(
+        title=dict(
+            text=f'风力涡轮机RCS极坐标图<br><sub>{selected_turbine.name} | 俯仰角 {elevation_angle}°</sub>',
+            font=dict(size=16)
+        ),
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                title=dict(
+                    text='RCS (dBm²)',
+                    font=dict(size=16, color='black')
+                ),
+                range=[0, max_rcs],
+                # 白色圆环网格线配置
+                gridcolor='white',
+                gridwidth=2,
+                tickfont=dict(color='black', size=16),
+                tickvals=np.linspace(0, max_rcs, 6),
+                linecolor='white',
+                linewidth=2
+            ),
+            angularaxis=dict(
+                tickmode='array',
+                tickvals=[0, 45, 90, 135, 180, 225, 270, 315],
+                ticktext=['0°', '45°', '90°', '135°', '180°', '225°', '270°', '315°'],
+                direction='clockwise',
+                rotation=90,  # 0度在上方
+                gridcolor='white',
+                gridwidth=1.5,
+                tickfont=dict(color='black', size=14)
+            ),
+            # 深蓝/灰蓝色背景，类似气象雷达
+            bgcolor='rgba(25, 50, 80, 0.9)'
+        ),
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.05,
+            bgcolor='rgba(255, 255, 255, 0.9)',
+            bordercolor='gray',
+            borderwidth=1
+        ),
+        height=650,
+        template='plotly_dark',
+        paper_bgcolor='rgba(240, 245, 250, 1)',
+        plot_bgcolor='rgba(240, 245, 250, 1)'
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # RCS统计信息
+    st.subheader("RCS统计信息")
+    
+    stats_data = []
+    for band_name in selected_bands:
+        rcs_values = np.array(rcs_data[band_name])
+        stats_data.append({
+            '波段': band_name,
+            '平均RCS (dBm²)': f"{np.mean(rcs_values):.1f}",
+            '最大RCS (dBm²)': f"{np.max(rcs_values):.1f}",
+            '最小RCS (dBm²)': f"{np.min(rcs_values):.1f}",
+            'RCS波动 (dB)': f"{np.std(rcs_values):.1f}"
+        })
+    
+    stats_df = pd.DataFrame(stats_data)
+    st.dataframe(stats_df, use_container_width=True, hide_index=True)
+    
+    # RCS物理说明
+    with st.expander("📖 RCS仿真说明", expanded=False):
+        st.markdown("""
+        **RCS（雷达散射截面积）仿真原理：**
+        
+        1. **塔筒RCS**（金属材质）：
+           - 采用圆柱体RCS模型
+           - 镜面反射分量：垂直入射时最强
+           - 边缘绕射分量：侧面入射时贡献大
+           - 低频（VHF/L）RCS较大，高频衰减较慢
+        
+        2. **叶片RCS**（玻璃钢材质）：
+           - 玻璃钢相比金属RCS低约18dB
+           - 采用平板近似模型
+           - 考虑叶片旋转姿态和叶片间干涉
+           - 高频衰减更明显（复合材料吸收）
+        
+        3. **频率特性**：
+           - **VHF/L波段**：RCS最大，穿透性强，结构谐振明显
+           - **S/C波段**：中等RCS，工程常用频段
+           - **X/Ku波段**：RCS较小，表面粗糙度影响大
+        
+        4. **方位调制特性**：
+           - **塔筒正面（0°, 180°）**：镜面反射峰值区域，RCS通常较大
+           - **塔筒侧面（90°, 270°）**：边缘绕射主导区域，RCS相对较小
+           - 但具体数值还受**俯仰角**和**叶片姿态**影响
+        
+        5. **为什么某些角度RCS较小？**
+           - **俯仰角影响**：当俯仰角不为0°时，塔筒的有效照射投影面积减小
+           - **叶片遮挡效应**：3个叶片以120°间隔分布，某些方位角下叶片会遮挡塔筒
+           - **相干抵消**：塔筒和叶片的散射场可能发生相位相消干涉
+           - **姿态调制**：叶片旋转导致周期性RCS起伏，某些方位正好处于波谷
+           - **边缘方向（90°, 270°附近）**：圆柱体侧面回波较弱，主要靠边缘绕射
+        """)
+
+
 def render_results():
     """渲染评估结果"""
     result = st.session_state.evaluation_result
@@ -1639,7 +1956,7 @@ def render_results():
             st.info(rec)
     
     # 详细结果标签页
-    tabs = st.tabs(["🚫 遮挡分析", "📡 散射分析", "🌊 多普勒分析", "🎯 精度分析", "🌊 多径效应", "🗻 绕射损耗"])
+    tabs = st.tabs(["🚫 遮挡分析", "📡 散射分析", "🌊 多普勒分析", "🎯 精度分析", "🌊 多径效应", "🗻 绕射损耗", "📊 RCS仿真"])
     
     with tabs[0]:
         render_blocking_results(result)
@@ -1658,6 +1975,9 @@ def render_results():
     
     with tabs[5]:
         render_diffraction_results(result)
+    
+    with tabs[6]:
+        render_rcs_simulation()
 
 
 def get_risk_class(risk_level: str) -> str:
