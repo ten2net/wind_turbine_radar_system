@@ -1,7 +1,7 @@
 """
-风机-雷达干扰评估系统 - 主应用
+长城数字风机-雷达干扰评估系统 - 主应用
 """
-from turtle import width
+# from turtle import width
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -14,7 +14,7 @@ from datetime import datetime
 
 # 设置页面配置
 st.set_page_config(
-    page_title="风机-雷达干扰评估系统",
+    page_title="长城数字风机-雷达干扰评估系统",
     page_icon="🌪️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -104,7 +104,7 @@ st.markdown("""
 
 def render_header():
     """渲染页面标题"""
-    st.markdown('<p class="main-header">🌪️ 风机-雷达干扰评估系统</p>', 
+    st.markdown('<p class="main-header">🌪️ 长城数字风机-雷达干扰评估系统</p>', 
                 unsafe_allow_html=True)
     st.markdown('<p class="sub-header">Wind Turbine - Radar Interference Assessment System</p>', 
                 unsafe_allow_html=True)
@@ -2987,8 +2987,9 @@ def render_circular_motion_map(sim, inner_pos, outer_pos, center_lat, center_lon
     
     df = pd.DataFrame(map_data)
     
-    # Mapbox API密钥
-    MAPBOX_API_KEY = "***REMOVED***"
+    # Mapbox API密钥 - 从环境变量或Streamlit secrets读取
+    import os
+    MAPBOX_API_KEY = os.environ.get('MAPBOX_TOKEN') or st.secrets.get('mapbox', {}).get('token', '')
     
     # 创建基础图层列表
     layers = []

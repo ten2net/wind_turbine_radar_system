@@ -32,5 +32,6 @@ pip install -q -r requirements.txt
 echo ""
 echo "启动应用..."
 echo "请在浏览器中访问: http://localhost:8501"
+echo "提示: 热加载已启用，修改代码后浏览器会自动刷新"
 echo ""
-cd src && streamlit run app.py 
+cd src && streamlit run app.py --server.runOnSave true --server.fileWatcherType poll

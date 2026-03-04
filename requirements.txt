@@ -18,3 +18,6 @@ openpyxl==3.1.0
 
 # 地图支持（可选，用于PyDeck）
 # pyarrow  # 大数据支持
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0

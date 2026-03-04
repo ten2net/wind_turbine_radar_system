@@ -5,7 +5,8 @@ enableXsrfProtection = false
 corsAllowedOrigins = ['http://localhost:8501', 'https://labs.mapbox.com']
 
 [mapbox]
-token = "***REMOVED***"
+# 从环境变量读取Mapbox Token，需在.streamlit/secrets.toml或环境变量中配置
+# token = "your_mapbox_token_here"
 
 [theme]
 backgroundColor = "#ffffff"
